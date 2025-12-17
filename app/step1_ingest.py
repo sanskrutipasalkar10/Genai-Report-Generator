@@ -17,8 +17,15 @@ def extract_text(file_path):
         return df.to_string(index=False)
 
     elif ext == "xlsx":
-        df = pd.read_excel(file_path)
-        return df.to_string(index=False)
+        xls = pd.ExcelFile(file_path)
+        all_sheets = []
+        for sheet_name in xls.sheet_names:
+            df = pd.read_excel(xls, sheet_name=sheet_name)
+            # Optional: add sheet name for reference
+            df.insert(0, "sheet_name", sheet_name)
+            all_sheets.append(df)
+        combined_df = pd.concat(all_sheets, ignore_index=True)
+        return combined_df.to_string(index=False)
 
     elif ext == "txt":
         with open(file_path, "r", encoding="utf-8") as f:
@@ -36,8 +43,13 @@ def ingest_files():
         if not os.path.isfile(file_path):
             continue
 
-        text = extract_text(file_path)
+        try:
+            text = extract_text(file_path)
+        except Exception as e:
+            print(f"⚠️ Failed to ingest {file}: {e}")
+            continue
 
+        # Save as TXT
         output_file = file + ".txt"
         output_path = os.path.join(PROCESSED_PATH, output_file)
 
