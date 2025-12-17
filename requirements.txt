@@ -1,0 +1,21 @@
+# ---------- Core LangChain (stable split packages) ----------
+langchain==0.1.16
+langchain-community==0.0.36
+langchain-text-splitters==0.0.1
+
+# ---------- Vector Database ----------
+chromadb==0.4.24
+
+# ---------- Ollama Integration ----------
+ollama==0.1.9
+
+# ---------- Data Handling ----------
+pandas==2.2.2
+openpyxl==3.1.2
+
+# ---------- PDF Parsing ----------
+pypdf==4.2.0
+
+# ---------- Utilities ----------
+tqdm==4.66.2
+numpy==1.26.4

@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+*.db
+*.log
+
+# Virtual Environment
+.venv/
+venv/
+
+# VSCode / IDE
+.vscode/
+.idea/
+
+# Mac / Windows files
+.DS_Store
+Thumbs.db
+
+# Chroma / Vector DB
+vector_store/chroma/
+
+# Processed files
+data/processed/
+
+# Reports (optional, depends if you want them in Git)
+reports/
