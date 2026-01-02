@@ -19,10 +19,24 @@ def ingest_document(file_path: str):
             extract_images_in_pdf=True
         )
     except Exception as e:
-        if "poppler" in str(e).lower() or "PDFInfoNotInstalledError" in str(type(e).__name__):
+        error_str = str(e).lower()
+        error_type = str(type(e).__name__)
+        
+        # Handle poppler missing error
+        if "poppler" in error_str or "PDFInfoNotInstalledError" in error_type:
             print("[WARNING] Poppler not found. Falling back to 'fast' strategy (may have lower table detection quality).")
             print("   To enable hi_res strategy, install poppler: https://github.com/oschwartz10612/poppler-windows/releases")
             # Fallback to "fast" strategy which doesn't require poppler
+            elements = partition(
+                filename=file_path,
+                strategy="fast",
+                infer_table_structure=True
+            )
+        # Handle pdfminer.psexceptions import error
+        elif "pdfminer" in error_str and "psexceptions" in error_str:
+            print("[WARNING] pdfminer.psexceptions import error. Falling back to 'fast' strategy.")
+            print("   This may be due to a version conflict. Try: pip install --upgrade pdfminer.six")
+            # Fallback to "fast" strategy
             elements = partition(
                 filename=file_path,
                 strategy="fast",
