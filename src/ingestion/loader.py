@@ -44,12 +44,18 @@ def ingest_document(file_path: str):
                 )
             except Exception as e2:
                 # If fast also fails, try "auto" strategy
-                print("[WARNING] 'fast' strategy also failed. Trying 'auto' strategy.")
-                elements = partition(
-                    filename=file_path,
-                    strategy="auto",
-                    infer_table_structure=True
-                )
+                try:
+                    print("[WARNING] 'fast' strategy also failed. Trying 'auto' strategy.")
+                    elements = partition(
+                        filename=file_path,
+                        strategy="auto",
+                        infer_table_structure=True
+                    )
+                except Exception as e3:
+                    # If all unstructured strategies fail, use pypdf as last resort
+                    print("[WARNING] All unstructured strategies failed. Using pypdf fallback (text only, no tables).")
+                    print(f"   Error details: {str(e3)[:200]}")
+                    return _fallback_pypdf_extraction(file_path)
         else:
             # Re-raise if it's a different error
             raise
@@ -66,3 +72,23 @@ def ingest_document(file_path: str):
             text_chunks.append(str(el))
             
     return text_chunks, tables
+
+def _fallback_pypdf_extraction(file_path: str):
+    """
+    Fallback PDF extraction using pypdf when unstructured fails.
+    Only extracts text, no table detection.
+    """
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(file_path)
+        text_chunks = []
+        
+        for page in reader.pages:
+            text = page.extract_text()
+            if text.strip():
+                text_chunks.append(text)
+        
+        # Return text chunks, no tables (pypdf doesn't detect tables)
+        return text_chunks, []
+    except Exception as e:
+        raise Exception(f"Even pypdf fallback failed: {e}")
