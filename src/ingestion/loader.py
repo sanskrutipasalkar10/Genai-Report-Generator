@@ -32,16 +32,24 @@ def ingest_document(file_path: str):
                 strategy="fast",
                 infer_table_structure=True
             )
-        # Handle pdfminer.psexceptions import error
-        elif "pdfminer" in error_str and "psexceptions" in error_str:
-            print("[WARNING] pdfminer.psexceptions import error. Falling back to 'fast' strategy.")
-            print("   This may be due to a version conflict. Try: pip install --upgrade pdfminer.six")
-            # Fallback to "fast" strategy
-            elements = partition(
-                filename=file_path,
-                strategy="fast",
-                infer_table_structure=True
-            )
+        # Handle pdfminer import errors (psexceptions, layout, etc.)
+        elif "pdfminer" in error_str:
+            print("[WARNING] pdfminer import error detected. Trying alternative PDF processing methods.")
+            # Try "fast" strategy first
+            try:
+                elements = partition(
+                    filename=file_path,
+                    strategy="fast",
+                    infer_table_structure=True
+                )
+            except Exception as e2:
+                # If fast also fails, try "auto" strategy
+                print("[WARNING] 'fast' strategy also failed. Trying 'auto' strategy.")
+                elements = partition(
+                    filename=file_path,
+                    strategy="auto",
+                    infer_table_structure=True
+                )
         else:
             # Re-raise if it's a different error
             raise
