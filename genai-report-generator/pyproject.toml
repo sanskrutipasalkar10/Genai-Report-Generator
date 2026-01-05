@@ -1,0 +1,36 @@
+[tool.poetry]
+name = "genai-report-generator"
+version = "0.1.0"
+description = "Local Multimodal RAG System using Llama 3 and LangGraph"
+authors = ["Your Name <you@company.com>"]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.12"
+fastapi = "^0.109.0"
+uvicorn = {extras = ["standard"], version = "^0.27.0"}
+python-dotenv = "^1.0.0"
+
+# AI Core
+langchain = "^0.1.16"
+langchain-community = "^0.0.33"
+langchain-ollama = "^0.0.1"
+langgraph = "^0.0.30"
+
+# Vector DB
+chromadb = "^0.4.24"
+langchain-chroma = "^0.1.0"
+
+# Ingestion (Heavy Dependencies)
+unstructured = {extras = ["all-docs"], version = "^0.13.0"}
+pandas = "^2.2.0"
+openpyxl = "^3.1.2"
+pypdf = "^4.0.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+ruff = "^0.3.0"
+black = "^24.0.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

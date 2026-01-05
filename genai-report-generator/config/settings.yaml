@@ -1,0 +1,23 @@
+project_name: "GenAI Report Generator (Local)"
+version: "1.0.0"
+
+server:
+  host: "0.0.0.0"
+  port: 8000
+
+llm:
+  # We use Llama 3 for everything since it is the most capable model you have
+  reasoning_model: "llama3"   # For the Analyst/Writer
+  extraction_model: "llama3"  # For reading tables/structure
+  base_url: "http://localhost:11434"
+  temperature: 0.1 # Keep it low for factual reporting
+
+embeddings:
+  model_name: "nomic-embed-text"
+  base_url: "http://localhost:11434"
+
+rag:
+  chunk_size: 512  # Smaller chunks are better for local models
+  chunk_overlap: 50
+  vector_db_path: "./data/chroma_db"
+  collection_name: "report_data"
