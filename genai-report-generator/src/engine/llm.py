@@ -1,5 +1,6 @@
 from functools import lru_cache
-from langchain_community.chat_models import ChatOllama
+# 🟢 UPDATED: Modern Import
+from langchain_ollama import ChatOllama 
 import yaml
 from pathlib import Path
 
@@ -23,6 +24,6 @@ def get_llm(model_type="reasoning"):
         model=model_name,
         base_url=config['llm']['base_url'],
         temperature=config['llm']['temperature'],
-        keep_alive="5m"  # Keep model in RAM for 5 mins
+        keep_alive="5m"
     )
     return llm

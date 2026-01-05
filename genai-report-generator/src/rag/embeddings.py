@@ -1,4 +1,5 @@
-from langchain_community.embeddings import OllamaEmbeddings
+# 🟢 UPDATED: Modern Import
+from langchain_ollama import OllamaEmbeddings
 import yaml
 from pathlib import Path
 

@@ -1,9 +1,11 @@
 import chromadb
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from src.rag.embeddings import get_embedding_model
 import yaml
 from pathlib import Path
+import os
 
+# Load Config
 CONFIG_PATH = Path(__file__).parent.parent.parent / "config/settings.yaml"
 with open(CONFIG_PATH) as f:
     config = yaml.safe_load(f)
@@ -14,7 +16,11 @@ def get_vector_store():
     
     # Persistent client to save data to disk
     persist_path = config['rag']['vector_db_path']
-    collection = config['rag']['collection_name']
+    collection = config['rag'].get('collection_name', 'default_collection')
+    
+    # Ensure directory exists
+    if not os.path.exists(persist_path):
+        os.makedirs(persist_path)
     
     vector_store = Chroma(
         collection_name=collection,
