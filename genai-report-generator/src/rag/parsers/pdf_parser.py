@@ -1,6 +1,10 @@
 import pdfplumber
 import pandas as pd
 from typing import List, Tuple, Optional
+import logging
+
+# Suppress PDFMiner warnings
+logging.getLogger("pdfminer").setLevel(logging.ERROR)
 
 def parse_hybrid_pdf(file_path: str) -> Tuple[str, List[pd.DataFrame]]:
     """

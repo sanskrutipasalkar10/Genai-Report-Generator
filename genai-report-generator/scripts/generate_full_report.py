@@ -3,12 +3,10 @@ import os
 import argparse
 from langchain_core.messages import HumanMessage
 
-# --- 1. SETUP & DIRECTORIES (CRITICAL FIX) ---
-# Get the absolute path of the project root
+# --- 1. SETUP & DIRECTORIES ---
+# Get the absolute path of the project root to ensure imports work from anywhere
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
-
-# Add project root to Python path so we can import 'src'
 sys.path.append(project_root)
 
 # Define where to save the reports
@@ -24,40 +22,51 @@ def main(file_path):
     print(f"🎬 Starting Full Report Generation for: {file_path}")
     
     # --- PHASE 1: UNIVERSAL INGESTION ---
-    # Unpack 3 values (Text, Tables, Config)
+    # Unpack 3 values: Raw Text (for summary), Tables (for math), Config (metadata)
     raw_text, tables, config = load_file(file_path)
     
-    if not tables:
-        print("❌ No structured data found. Exiting.")
+    # 🟢 VALIDATION: Only exit if BOTH text and tables are missing.
+    # This allows Excel (Tables) and Word/PDF (Text) to both pass.
+    if not tables and not raw_text:
+        print("❌ File is empty or unreadable. Exiting.")
         return
 
-    # Print what the Inspector found
-    report_type = config.get("report_type", "OPERATIONAL")
+    report_type = config.get("report_type", "GENERAL_TEXT")
     print(f"🔍 Inspector identified Report Type: {report_type}")
 
-    # --- PHASE 2: EXECUTION (Analyst) ---
-    print("\n--- 🤖 Step 2: Analyzing Data ---")
+    # --- PHASE 2: ANALYSIS (Conditional) ---
+    final_metric = "N/A (Text Analysis Only)"
     
-    # Define task based on type
-    if report_type == "FINANCIAL":
-        task = "Analyze the P&L trends. Calculate total revenue and EBITDA margin if data is available."
-    else:
-        task = "Calculate the total volume/sum of the main numerical metrics."
+    # Only run the Analyst Agent if we actually have tables to calculate things.
+    if tables:
+        print("\n--- 🤖 Step 2: Analyzing Data ---")
+        
+        # Dynamic Task Assignment
+        if report_type == "FINANCIAL":
+            task = "Analyze the P&L trends. Calculate total revenue and EBITDA margin."
+        else:
+            task = "Calculate the total volume/sum of the main numerical metrics."
 
-    # Prepare state for the agent
-    analyst_state = {
-        "messages": [HumanMessage(content=task)],
-        "data": tables,
-        "config": config 
-    }
-    
-    # Run the Analyst
-    analyst_output = analyst_agent(analyst_state)
-    final_metric = analyst_output['final_answer']
-    
+        # Prepare state for the agent
+        analyst_state = {
+            "messages": [HumanMessage(content=task)],
+            "data": tables, # Passes ALL Excel sheets here
+            "config": config 
+        }
+        
+        try:
+            analyst_output = analyst_agent(analyst_state)
+            final_metric = analyst_output['final_answer']
+        except Exception as e:
+            print(f"⚠️ Analyst Warning: Could not analyze tables. {e}")
+            final_metric = "Error in Data Analysis"
+    else:
+        print("\n--- 🤖 Step 2: Analyst Skipped (No Data Tables found) ---")
+
     # --- PHASE 3: REPORTING (Writer) ---
     print("\n--- ✍️ Step 3: Writing Final Report ---")
     
+    # The Writer works with EITHER raw_text OR analysis_result OR both
     final_report = writer_agent(
         context_text=raw_text, 
         analysis_result=final_metric
@@ -67,7 +76,7 @@ def main(file_path):
     report_filename = os.path.splitext(os.path.basename(file_path))[0] + "_report.md"
     report_path = os.path.join(ARTIFACTS_DIR, report_filename)
     
-    # 🟢 FIX: Use utf-8 to prevent crashes with symbols like ₹
+    # 🟢 ENCODING FIX: Use utf-8 to prevent crashes with currency symbols (₹, $, etc.)
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(final_report)
         
@@ -78,7 +87,7 @@ def main(file_path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate a full AI report from a file.")
-    parser.add_argument("file_path", help="Path to the data file (PDF, XLSX, CSV)")
+    parser.add_argument("file_path", help="Path to the data file (PDF, XLSX, CSV, DOCX, TXT)")
     args = parser.parse_args()
     
     main(args.file_path)
