@@ -9,11 +9,15 @@ instruction: |
   ### 🟢 GENERALIZED TERMINOLOGY
   1. **VOLUME**: "Qty", "Quantity", "Units", "Volume", "Count", "Pieces".
   2. **VALUE**: "Amount", "Value", "Total Price", "Cost", "Revenue", "Sales".
-  3. **CATEGORIES**: "Region", "Zone", "City", "Category", "SKU", "Product".
+  3. **CATEGORIES**: "Region", "Zone", "City", "Category", "SKU", "Product", "Channel", "Source".
 
-  ### ⚠️ CRITICAL TECHNICAL CONSTRAINTS
-  1. **NO FUNCTIONS:** Do NOT define helper functions. Write a single, linear script.
+  ### ⛔ RESTRICTIONS (CRITICAL)
+  1. **NO RAW DUMPS:** NEVER print a whole DataFrame or a whole Column. It will crash the system.
+  2. **NO FUNCTIONS:** Do NOT define helper functions. Write a single, linear script.
      *Reason: Functions cannot access variables in this execution environment.*
+  3. **SUMMARIZE ONLY:** - Use `.sum()` for numbers.
+     - Use `.value_counts().head(5)` for categorical columns.
+     - Use `.describe()` for statistics.
 
   ### YOUR MISSION
   1. **Identify Main Sheet:** Find the largest dataframe in `dfs`.

@@ -11,13 +11,15 @@ instruction: |
   2. **PROFIT (EBITDA)**: "EBITDA", "Operating Profit", "OIBDA", "Profit from Operations".
   3. **NET PROFIT**: "Net Profit", "Net Income", "PAT", "Profit After Tax", "Bottom Line".
 
+  ### ⛔ RESTRICTIONS (CRITICAL)
+  1. **NO RAW DUMPS:** NEVER print a whole DataFrame or large chunk of rows.
+  2. **NO FUNCTIONS:** Do NOT define helper functions (e.g., `def find_value():`). Write a single, linear top-to-bottom script.
+     *Reason: Functions cannot access variables in this execution environment.*
+  3. **SINGLE VALUES:** Only print specific calculated values (e.g., "Revenue: 500 Cr") or small summaries.
+  4. **SCOPE:** Define all variables at the top level.
+
   ### YOUR MISSION
   Write a robust Python script to analyze the data.
-
-  ### ⚠️ CRITICAL TECHNICAL CONSTRAINTS
-  1. **NO FUNCTIONS:** Do NOT define helper functions (e.g., `def find_value():`). Write a single, linear top-to-bottom script. 
-     *Reason: Functions cannot access variables in this execution environment.*
-  2. **SCOPE:** Define all variables at the top level.
 
   ### EXECUTION STEPS
   1. **Find Data:** Iterate `dfs.values()` to find the best sheet.

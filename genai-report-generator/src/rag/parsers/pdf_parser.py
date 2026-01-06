@@ -1,50 +1,76 @@
 import pdfplumber
 import pandas as pd
-from typing import List, Tuple, Optional
-import logging
+from typing import Tuple, Dict
+import pdfplumber
+import pandas as pd
+import logging  # <--- Add this
 
-# Suppress PDFMiner warnings
+# 🟢 SILENCE WARNINGS: This stops the console spam
 logging.getLogger("pdfminer").setLevel(logging.ERROR)
 
-def parse_hybrid_pdf(file_path: str) -> Tuple[str, List[pd.DataFrame]]:
+from typing import Tuple, Dict
+
+# ... rest of your code ...
+
+def parse_hybrid_pdf(file_path: str) -> Tuple[str, Dict[str, pd.DataFrame]]:
     """
-    Scans a PDF and separates it into:
-    1. Raw Text (for RAG/Summarization)
-    2. DataFrames (for Analyst/Calculation)
+    Extracts text and filters for high-quality data tables from PDF.
     """
-    full_text = []
-    extracted_tables = []
-    
-    print(f"🔍 Scanning PDF: {file_path}...")
-    
-    with pdfplumber.open(file_path) as pdf:
-        for i, page in enumerate(pdf.pages):
-            # 1. Extract Tables from this page
-            tables = page.extract_tables()
+    full_text = ""
+    tables = {}
+    table_count = 0
+
+    try:
+        with pdfplumber.open(file_path) as pdf:
+            print(f"   📄 Scanning {len(pdf.pages)} pages in PDF...")
             
-            for table_data in tables:
-                # Clean Data: Remove None/Empty cells
-                clean_table = [row for row in table_data if any(row)]
+            for i, page in enumerate(pdf.pages):
+                # 1. Extract Text
+                text = page.extract_text()
+                if text:
+                    full_text += f"--- Page {i+1} ---\n{text}\n\n"
+
+                # 2. Extract Tables
+                extracted_table_data = page.extract_tables()
                 
-                if clean_table:
-                    # Assume first row is header
-                    try:
-                        df = pd.DataFrame(clean_table[1:], columns=clean_table[0])
+                for table_data in extracted_table_data:
+                    if not table_data:
+                        continue
                         
-                        # 🟢 FIX: Modern Pandas numeric conversion
-                        # Try to convert each column to numeric, if it fails, keep as is.
-                        for col in df.columns:
-                            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(df[col])
+                    # --- 🟢 HEURISTIC FILTERING ---
+                    # Rule 1: Minimum Size (2x2)
+                    if len(table_data) < 2 or len(table_data[0]) < 2:
+                        continue
+                    
+                    # Clean data: Replace None with ""
+                    clean_data = [[cell if cell is not None else "" for cell in row] for row in table_data]
+                    
+                    # Rule 2: Header sanity check
+                    # If the first row is massive text blocks, it's likely layout, not a header
+                    if len(str(clean_data[0])) > 1000:
+                        continue
+
+                    try:
+                        header = clean_data[0]
+                        # Handle duplicate headers
+                        header = [f"{col}_{j}" if header.count(col) > 1 else col for j, col in enumerate(header)]
+                        
+                        df = pd.DataFrame(clean_data[1:], columns=header)
+                        
+                        # Rule 3: Numerical Density
+                        # Check if at least one cell has a number
+                        has_numbers = df.astype(str).apply(lambda x: x.str.contains(r'\d', na=False)).any().any()
+                        
+                        if has_numbers:
+                            table_count += 1
+                            tables[f"PDF_Table_{table_count}"] = df
                             
-                        extracted_tables.append(df)
-                        print(f"   found table on page {i+1} with columns: {list(df.columns)}")
                     except Exception as e:
-                        print(f"   ⚠️ Warning: Could not parse table on page {i+1}: {e}")
+                        continue
 
-            # 2. Extract Text (ignoring tables to avoid duplication usually requires complex coordinate logic, 
-            # but for now we extract full text for context)
-            text = page.extract_text()
-            if text:
-                full_text.append(text)
+        print(f"   ✅ Extracted {len(tables)} Valid Tables (Filtered out junk).")
+        return full_text, tables
 
-    return "\n".join(full_text), extracted_tables
+    except Exception as e:
+        print(f"❌ PDF Parse Error: {e}")
+        return "", {}
