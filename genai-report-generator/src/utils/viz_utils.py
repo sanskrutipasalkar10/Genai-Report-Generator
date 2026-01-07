@@ -49,7 +49,8 @@ def generate_smart_charts(df, output_dir):
             plt.figure(figsize=(10, 6))
             # Get top 10 values
             top_vals = df[cat_col].value_counts().head(10)
-            sns.barplot(x=top_vals.values, y=top_vals.index, palette="viridis")
+            # Updated to avoid FutureWarning
+            sns.barplot(x=top_vals.values, y=top_vals.index, hue=top_vals.index, palette="viridis", legend=False)
             plt.title(f"Distribution by {cat_col}", fontsize=14)
             plt.xlabel("Count")
             plt.tight_layout()
