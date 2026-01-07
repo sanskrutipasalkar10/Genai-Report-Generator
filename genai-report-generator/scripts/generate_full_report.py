@@ -18,13 +18,16 @@ from src.rag.file_loader import load_file
 from src.engine.agents.analyst import analyst_agent
 from src.engine.agents.writer import writer_agent
 
-# --- IMPORT SUMMARIZER ---
+# --- IMPORT SMART UTILS ---
+# We import both the summarizer and the smart loader
 try:
-    from src.utils.data_utils import summarize_dataframe
+    from src.utils.data_utils import summarize_dataframe, smart_load_table
 except ImportError:
-    # Fallback to prevent crash if file is missing
-    print("⚠️ Warning: src/utils/data_utils.py not found. Creating simple summary.")
+    print("⚠️ Warning: src/utils/data_utils.py not found. Using basic fallback.")
+    # Fallback definitions to prevent crash
     def summarize_dataframe(df): return str(df.describe())
+    def smart_load_table(path): 
+        return pd.read_csv(path) if path.endswith('.csv') else pd.read_excel(path)
 
 def main(file_path):
     print(f"🎬 Starting Full Report Generation for: {file_path}")
@@ -33,34 +36,46 @@ def main(file_path):
     raw_text, tables, config = load_file(file_path)
     
     # 🔴 FORCE DATA HANDLING FOR CSV/EXCEL
-    # Even if load_file returned text, we discard it and force aggregation for structured files.
+    # If it is a structured file, we ignore the raw text dump and use Smart Aggregation.
     if file_path.lower().endswith(('.csv', '.xlsx', '.xls')):
-        print("⚡ Tabular file detected. Forcing Smart Aggregation...")
+        print("⚡ Tabular file detected. Using Smart Loader & Aggregation...")
         
         try:
-            # 1. Force Load DataFrame
-            if file_path.lower().endswith('.csv'):
-                df = pd.read_csv(file_path)
-            else:
-                df = pd.read_excel(file_path)
+            # 1. Use Smart Loader (Handles merged headers, metadata rows)
+            df = smart_load_table(file_path)
             
-            # 2. Force Summary Generation
+            # 2. Generate Elaborated Summary (Includes Outliers, Financial Sums, Missing Vals)
+            print("📊 Generating comprehensive statistical summary...")
             summary = summarize_dataframe(df)
             
-            # 3. OVERRIDE raw_text
-            # This ensures the Writer Agent NEVER sees the raw rows
+            # 3. OVERRIDE raw_text with ENRICHED CONTEXT
+            # This prompt ensures the Writer Agent looks for specific insights
             raw_text = f"""
-            DATASET SUMMARY (Aggregated from {len(df)} rows):
+            SYSTEM GENERATED DATA INTELLIGENCE REPORT
+            =========================================
+            This is a pre-computed statistical summary of the raw dataset. 
+            Do NOT complain about missing data. Use the statistics below to write the report.
+
+            DATA SUMMARY:
             {summary}
+
+            WRITER INSTRUCTIONS:
+            1. FINANCIALS: Look for the 'FINANCIAL & VOLUME TOTALS' section. You MUST report the Total Revenue, Total Units Sold, and Gross Profit if available.
+            2. DEMOGRAPHICS: Analyze the 'Customer_Age', 'Gender', and 'Location' (State/Zone) columns.
+            3. PRODUCT MIX: Detail the 'Model', 'Variant', and 'Fuel_Type' breakdown.
+            4. PERFORMANCE: Analyze 'NPS' (Net Promoter Score) and 'OTD_Days' (Delivery Time) if present.
+            5. CORRELATIONS: If you see high discounts and high sales, mention that relationship.
             """
             
-            # 4. Ensure tables is populated for the Analyst
+            # 4. Update 'tables' for the Analyst Agent
+            # We keep the cleaned DataFrame here in case the Analyst needs to run specific math.
             tables = [df]
             
-            print(f"✅ Data Compressed: {len(df)} rows converted to {len(summary.splitlines())} lines of summary.")
+            print(f"✅ Data Processed: {len(df)} rows compressed into {len(summary.splitlines())} lines of insight.")
             
         except Exception as e:
-            print(f"❌ Error reading table file: {e}")
+            print(f"❌ Error processing table file: {e}")
+            # If smart load fails, we return early to avoid generating a garbage report
             return
 
     # 🟢 VALIDATION
@@ -102,7 +117,7 @@ def main(file_path):
     print("\n--- ✍️ Step 3: Writing Final Report ---")
     
     # DEBUG: Show user what is being sent to the writer
-    print(f"ℹ️ Input to Writer Agent (First 200 chars): {raw_text[:200]}...")
+    print(f"ℹ️ Input to Writer Agent (First 500 chars):\n{raw_text[:500]}...\n")
     
     final_report = writer_agent(
         context_text=raw_text, 
