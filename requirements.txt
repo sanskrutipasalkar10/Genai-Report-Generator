@@ -29,7 +29,7 @@ xlrd>=2.0.1               # For older Excel (.xls) support
 pypdf>=4.2.0
 pdf2image>=1.17.0         # For converting PDF pages to images for vision models
 pillow>=10.3.0            # Image processing
-
+pdfplumber>=0.10.3
 # --- Tooling & Utilities ---
 httpx>=0.27.0             # Async HTTP client
 tiktoken>=0.6.0           # Token counting (useful even for local models)
