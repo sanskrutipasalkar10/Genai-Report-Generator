@@ -1,10 +1,12 @@
 import sys
 import os
 import argparse
-import pandas as pd 
+import pandas as pd
 import yaml
+import json
+import requests
 from io import StringIO
-from langchain_core.messages import HumanMessage
+import traceback
 
 # --- 1. SETUP & DIRECTORIES ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -15,222 +17,227 @@ ARTIFACTS_DIR = os.path.join(project_root, "data", "artifacts")
 IMAGES_DIR = os.path.join(ARTIFACTS_DIR, "images")
 os.makedirs(IMAGES_DIR, exist_ok=True)
 
-# Import internal modules
 from src.rag.file_loader import load_file
-from src.engine.agents.analyst import analyst_agent
 from src.engine.agents.writer import writer_agent
 
-# 🟢 IMPORT THE CODE EXECUTOR
+# 🟢 IMPORT CODE EXECUTOR
 try:
     from src.engine.tools.code_executor import execute_python_code
 except ImportError:
     print("❌ Critical: src/engine/tools/code_executor.py not found.")
     sys.exit(1)
 
-# --- 🟢 DYNAMIC LLM LOADER ---
-def load_config():
-    config_path = os.path.join(project_root, "config", "settings.yaml")
-    if os.path.exists(config_path):
-        with open(config_path, "r") as f:
-            return yaml.safe_load(f)
-    return {}
+# --- 🟢 UNIVERSAL REST AGENT ---
+class OllamaRestAgent:
+    def __init__(self, model_name, base_url):
+        self.model_name = model_name
+        self.base_url = base_url.rstrip('/') + "/api/generate"
+
+    def invoke(self, prompt_text):
+        content = prompt_text.content if hasattr(prompt_text, 'content') else str(prompt_text)
+        payload = {"model": self.model_name, "prompt": content, "stream": True}
+        try:
+            response = requests.post(self.base_url, data=json.dumps(payload), stream=True)
+            response.raise_for_status()
+            full_text = ""
+            for line in response.iter_lines():
+                if line:
+                    data = json.loads(line.decode('utf-8'))
+                    if 'response' in data: full_text += data['response']
+                    if data.get('done'): break
+            class MockResponse:
+                def __init__(self, text): self.content = text
+            return MockResponse(full_text)
+        except Exception as e:
+            print(f"\n❌ REST API Error: {e}")
+            class MockResponse:
+                def __init__(self, text): self.content = ""
+            return MockResponse("")
 
 def get_llm():
-    """Loads Ollama settings from config/settings.yaml"""
-    config = load_config()
-    llm_config = config.get("llm", {})
-    
-    # Defaults
-    model_name = llm_config.get("reasoning_model", "qwen2.5:0.5b")
-    base_url = llm_config.get("base_url", "http://localhost:11434")
-    temp = llm_config.get("temperature", 0.1)
+    return OllamaRestAgent("qwen3-coder:480b-cloud", "http://localhost:11434")
 
+# --- UTILS ---
+def smart_load_table(path): 
+    # Do NOT try to read PDFs/DOCX as Excel
+    if path.lower().endswith(('.pdf', '.docx', '.doc')):
+        return pd.DataFrame()
+        
     try:
-        # 🟢 FIX DEPRECATION WARNING: Use langchain_ollama if available
-        try:
-            from langchain_ollama import ChatOllama
-        except ImportError:
-            from langchain_community.chat_models import ChatOllama
-            
-        return ChatOllama(model=model_name, base_url=base_url, temperature=temp)
+        print(f"📂 Smart Loading: {path}")
+        if path.endswith('.csv'): return pd.read_csv(path, header=None)
+        return pd.read_excel(path, header=None)
     except Exception as e:
-        print(f"❌ Error initializing Ollama: {e}")
-        sys.exit(1)
-
-# --- IMPORT UTILS ---
-try:
-    from src.utils.data_utils import smart_load_table
-except ImportError:
-    def smart_load_table(path): return pd.read_csv(path) if path.endswith('.csv') else pd.read_excel(path)
-
-try:
-    from src.utils.viz_utils import generate_smart_charts
-except ImportError:
-    def generate_smart_charts(df, output_dir): return []
-
-try:
-    from src.utils.pdf_utils import convert_markdown_to_pdf_brochure
-except ImportError:
-    convert_markdown_to_pdf_brochure = None
+        print(f"❌ Smart Load Failed: {e}")
+        return pd.DataFrame()
 
 # ---------------------------------------------------------
-# 🧠 DYNAMIC CODE GENERATION (WITH SAFETY FILTER)
+# 🕵️ AGENT 1: INSPECTOR
 # ---------------------------------------------------------
-def generate_dynamic_summary(df):
-    print("🧠 Agent is writing Python analysis code...")
-    
-    # 1. Get DataFrame Structure
-    buffer = StringIO()
-    df.info(buf=buffer)
-    schema_info = buffer.getvalue()
-    
-    # 2. Construct Prompt (Simplified for Small Models)
+def run_inspector_agent(df):
+    print("\n🕵️ Inspector Agent is analyzing file structure...")
+    buffer = StringIO(); df.info(buf=buffer); schema_info = buffer.getvalue()
+    try: sample = df.head(10).to_markdown(index=False)
+    except: sample = df.head(10).to_string(index=False)
+
     prompt = f"""
-    You are a Python Data Analyst. 
-    You have a pandas DataFrame named 'df' loaded in memory.
+    You are a Senior Data Architect. Reverse-engineer this dataset.
+    
+    RAW DATA (First 10 Rows):
+    {sample}
     
     SCHEMA:
     {schema_info}
     
     TASK:
-    Write a Python script to print a summary.
-    1. Print total rows: len(df)
-    2. Print sum of numerical columns.
-    3. Print top 3 values for 'Zone' and 'State' if they exist.
+    1. Identify the REAL header row index.
+    2. Map "Unnamed" columns to business labels.
+    3. Identify Key Metrics (Revenue, Counts, etc).
     
-    RULES:
-    - DO NOT load any files. df is already defined.
-    - DO NOT use pd.read_csv or pd.read_excel.
-    - Wrap code in ```python blocks.
-    - Use print() for all outputs.
+    OUTPUT FORMAT (STRICT):
+    HEADER ROW INDEX: [Integer]
+    COLUMN MAPPINGS:
+    - Column 0: [Name]
+    ...
+    METRICS TO CALCULATE:
+    - [Metric 1]
     """
-    
-    # 3. Get Code from LLM
-    try:
-        llm = get_llm()
-        response = llm.invoke(prompt)
-        code_text = response.content if hasattr(response, 'content') else str(response)
-        
-        # 🟢 DEBUG: Show what the clumsy AI wrote
-        # print(f"\n[DEBUG] AI Generated Code:\n{code_text}\n") 
-        
-        # 🟢 SAFETY FILTER: Remove file loading attempts
-        clean_lines = []
-        for line in code_text.split('\n'):
-            if "read_csv" in line or "read_excel" in line:
-                print(f"   🛡️ Blocked unsafe line: {line.strip()}")
-                continue
-            clean_lines.append(line)
-        code_text = "\n".join(clean_lines)
-
-    except Exception as e:
-        print(f"⚠️ LLM Generation Failed: {e}")
-        return str(df.describe()) 
-
-    # 4. Execute the Code safely
-    result = execute_python_code(code_text, df)
-    
-    # Check if execution failed
-    if "Error executing code" in result:
-        print(f"   ⚠️ Code Execution Error: {result}")
-        return str(df.describe()) # Fallback to standard stats
-        
-    return result
+    response = get_llm().invoke(prompt)
+    print("\n" + "="*40 + "\n📋 TECHNICAL SPEC:\n" + response.content[:300] + "...\n" + "="*40 + "\n")
+    return response.content, schema_info
 
 # ---------------------------------------------------------
-# MAIN EXECUTION
+# 🚑 AGENT 2: SELF-HEALING CODER
 # ---------------------------------------------------------
-def main(file_path):
-    print(f"🎬 Starting Full Report Generation for: {file_path}")
-    
-    raw_text, tables, config = load_file(file_path)
-    created_charts = []
+def run_self_healing_coder(df, plan, schema_info):
+    MAX_RETRIES = 3
+    current_error = None
+    previous_code = ""
 
-    if file_path.lower().endswith(('.csv', '.xlsx', '.xls')):
-        print("⚡ Tabular file detected. Using Smart Loader...")
-        
-        try:
-            df = smart_load_table(file_path)
+    for attempt in range(1, MAX_RETRIES + 2):
+        if attempt == 1:
+            print(f"👨‍💻 Coder Agent: Initial Attempt...")
+            prompt = f"""
+            You are a Senior Python Engineer. Implement this Spec on 'df'.
             
-            print("📊 Generating agentic statistical summary...")
-            summary = generate_dynamic_summary(df) 
-            print(f"   ✅ Agent Analysis Complete.")
+            SPEC: {plan}
+            SCHEMA: {schema_info}
             
-            print("🎨 Generating visual analytics...")
-            created_charts = generate_smart_charts(df, IMAGES_DIR)
+            CRITICAL RULES:
+            1. **HEADER FIX**: `df.columns = df.iloc[X]; df = df[X+1:].copy()`
+            2. **NUMERICS**: `pd.to_numeric(..., errors='coerce')`.
+            3. **ANALYSIS**: PRINT results (sums, counts, averages).
+            4. **OVERWRITE**: Update `df` in place.
             
-            if created_charts:
-                chart_info = "\n".join([f"- {desc}" for desc, path in created_charts])
-            else:
-                chart_info = "(No charts could be generated)"
-
-            raw_text = f"""
-            SYSTEM GENERATED DATA INTELLIGENCE REPORT
-            =========================================
-            The following analysis was generated by executing Python code on the raw data.
-            It is mathematically accurate.
-            
-            EXECUTED CODE OUTPUT:
-            {summary}
-
-            AVAILABLE VISUALIZATIONS:
-            I have already generated the following charts. They will be appended to the report.
-            {chart_info}
-
-            WRITER INSTRUCTIONS:
-            1. Use the 'EXECUTED CODE OUTPUT' above as the absolute truth.
-            2. Report Financials (Revenue, Profit) exactly as calculated.
-            3. Analyze insights based on the Top 3 categorical values found.
-            4. Do not mention file errors.
+            Wrap code in ```python.
             """
+        else:
+            print(f"🚑 Debugger Agent: Attempt {attempt} (Fixing Error)...")
+            prompt = f"""
+            Fix this Python code.
             
-            tables = [df]
+            PREVIOUS CODE: {previous_code}
+            ERROR: {current_error}
             
-        except Exception as e:
-            print(f"❌ Error processing table file: {e}")
-            import traceback
-            traceback.print_exc()
-            return
+            TASK:
+            1. Fix bugs.
+            2. **ADD PRINT STATEMENTS**: You MUST print analysis results.
+            3. Ensure `df` is modified in place.
+            """
 
-    if not tables and not raw_text:
-        print("❌ File is empty or unreadable. Exiting.")
+        response = get_llm().invoke(prompt)
+        generated_code = response.content
+        previous_code = generated_code 
+
+        result_text, cleaned_df = execute_python_code(generated_code, df)
+
+        if "Error executing code" in result_text:
+            current_error = result_text
+            print(f"   ⚠️ Failed: {current_error[:60]}...")
+            continue 
+        elif len(result_text.strip()) < 10:
+            current_error = "Code executed but printed NOTHING."
+            print(f"   ⚠️ Output empty. Retrying...")
+            continue
+        else:
+            print("   ✅ Success! Analysis Generated.")
+            return result_text, cleaned_df 
+
+    return f"FAILED. Last Error: {current_error}", df
+
+# --- MAIN ---
+def main(file_path):
+    print(f"🎬 Processing: {file_path}")
+    
+    # 1. Ingest (Handles PDF/DOCX Text & Tables)
+    raw_text, tables, config = load_file(file_path)
+    
+    df = pd.DataFrame()
+    
+    # 🟢 FIXED LOGIC: Handle List OR Dict types for 'tables'
+    if tables:
+        if isinstance(tables, list) and len(tables) > 0:
+            print(f"   ✅ Found {len(tables)} tables (List). Using the first one.")
+            df = tables[0]
+        elif isinstance(tables, dict) and len(tables) > 0:
+            print(f"   ✅ Found {len(tables)} tables (Dict). Using the first one.")
+            # Safely grab the first available dataframe
+            df = list(tables.values())[0]
+            
+    # If no tables found via loader, try smart load (for Excel/CSV)
+    if df.empty:
+        df = smart_load_table(file_path)
+
+    # PATH A: DATA MODE (If we have a valid table)
+    if not df.empty:
+        # 2. Analyze & Clean
+        plan, schema_info = run_inspector_agent(df)
+        analysis_output, cleaned_df = run_self_healing_coder(df, plan, schema_info)
+        
+        # 3. Visuals
+        print("🎨 Generating Charts...")
+        charts = []
+        try:
+            from src.utils.viz_utils import generate_smart_charts
+            target_df = cleaned_df if not cleaned_df.empty else df
+            if len(target_df) > 0 and len(target_df.columns) > 1:
+                charts = generate_smart_charts(target_df, IMAGES_DIR)
+                print(f"   ✅ Created {len(charts)} charts.")
+        except Exception as e: print(f"   ⚠️ Chart Error: {e}")
+
+        chart_section = "\n## Visual Analytics\n" + "\n".join([f"![{d}]({os.path.relpath(p, ARTIFACTS_DIR).replace(os.sep, '/')})" for d, p in charts]) if charts else ""
+        context = f"TECHNICAL SPEC:\n{plan}\n\nDERIVED INSIGHTS:\n{analysis_output}\n\nVISUALS:\nAttached {len(charts)} charts."
+        
+    # PATH B: TEXT MODE (Brochures/Docs with no data)
+    elif raw_text and len(raw_text) > 10:
+        print("ℹ️ No structured data found. Switching to TEXT ANALYSIS mode.")
+        context = f"DOCUMENT CONTENT:\n{raw_text[:15000]}...\n\nINSTRUCTION: Summarize this brochure/document highlighting key offerings, vision, and details."
+        chart_section = ""
+        analysis_output = "Text Analysis Mode"
+        charts = []
+    else:
+        print("❌ Error: File contains no readable text or tables.")
         return
 
-    print("\n--- ✍️ Step 3: Writing Final Report ---")
-    final_report = writer_agent(context_text=raw_text, analysis_result="Generated via Code Interpreter")
+    # 4. Write Report
+    print("\n--- ✍️ Writing Report ---")
+    report = writer_agent(context, "Strategic Analysis")
     
-    report_filename = os.path.splitext(os.path.basename(file_path))[0] + "_report.md"
-    report_path = os.path.join(ARTIFACTS_DIR, report_filename)
-    
-    with open(report_path, "w", encoding="utf-8") as f:
-        f.write(final_report)
-        
-    print(f"\n✅ SUCCESS! Report saved to: {report_path}")
+    final_report = report + ("\n" + chart_section if "Visual Analytics" not in report else "")
+    out_path = os.path.join(ARTIFACTS_DIR, f"{os.path.basename(file_path)}_report.md")
+    with open(out_path, "w", encoding="utf-8") as f: f.write(final_report)
+    print(f"✅ Saved: {out_path}")
 
-    if convert_markdown_to_pdf_brochure:
-        print("\n--- 📕 Step 4: Generating PDF Brochure ---")
-        pdf_filename = os.path.splitext(os.path.basename(file_path))[0] + "_brochure.pdf"
-        pdf_path = os.path.join(ARTIFACTS_DIR, pdf_filename)
-        
-        base_name = os.path.splitext(os.path.basename(file_path))[0]
-        report_title = base_name.replace("_", " ").replace("-", " ").title()
-        
-        try:
-            convert_markdown_to_pdf_brochure(
-                final_report, 
-                pdf_path, 
-                IMAGES_DIR,
-                title=report_title,
-                subtitle="Agentic AI Analysis",
-                chart_list=created_charts 
-            )
-            print(f"✅ PDF SUCCESS! Brochure saved to: {pdf_path}")
-        except Exception as e:
-            print(f"❌ PDF Generation Failed: {e}")
+    # 5. PDF
+    print("--- 📕 Generating PDF ---")
+    try:
+        from src.utils.pdf_utils import convert_markdown_to_pdf_brochure
+        if convert_markdown_to_pdf_brochure:
+            convert_markdown_to_pdf_brochure(final_report, out_path.replace(".md", ".pdf"), IMAGES_DIR, title=os.path.basename(file_path), chart_list=charts)
+            print(f"✅ PDF Created: {out_path.replace('.md', '.pdf')}")
+    except: pass
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate a full AI report from a file.")
-    parser.add_argument("file_path", help="Path to the data file (PDF, XLSX, CSV, DOCX, TXT)")
-    args = parser.parse_args()
-    
-    main(args.file_path)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("file_path")
+    main(parser.parse_args().file_path)
