@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np  # 🟢 ADDED: NumPy support
 import sys
 import re
 from io import StringIO
@@ -76,6 +77,8 @@ def execute_python_code(code: str, data: dict) -> str:
     local_scope = {
         "dfs": data, 
         "pd": pd,
+        "np": np,       # 🟢 ADDED: Access to np alias
+        "numpy": np,    # 🟢 ADDED: Access to full numpy name
         "tools": tools, # The LLM can now use 'tools.get_active_sheet()'
         "df": data      # Fallback
     }
