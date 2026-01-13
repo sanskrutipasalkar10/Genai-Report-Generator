@@ -47,8 +47,7 @@ def parse_docx(file_path: str) -> Tuple[str, Dict[str, pd.DataFrame]]:
                 continue
             
             # Create DataFrame
-            # 🟢 CRITICAL CHANGE: header=None. 
-            # We let DataSanitizer decide which row is the header later.
+            # 🟢 RAW MODE: No Headers. DataSanitizer will fix it.
             df = pd.DataFrame(data)
             
             # Rule 3: Content check - Financial tables usually have numbers

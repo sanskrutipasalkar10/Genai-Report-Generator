@@ -49,23 +49,23 @@ class DataSanitizer:
         try:
             if df.empty: return df
 
-            # 1. LOCATE REAL HEADER
+            # 1. LOCATE REAL HEADER (With Protection for Existing Headers)
             df = DataSanitizer._locate_and_set_header(df)
 
             # 2. HANDLE MERGED HEADERS
             df = DataSanitizer._flatten_multi_headers(df)
 
-            # 🟢 CRITICAL STEP: CLEAN & DEDUPLICATE COLUMNS
+            # 3. CLEAN & DEDUPLICATE COLUMNS
             # Must run BEFORE _fill_merged_cells to prevent errors with duplicate column names
             df = DataSanitizer._clean_column_names(df)
 
-            # 3. HANDLE MERGED CELLS
+            # 4. HANDLE MERGED CELLS
             df = DataSanitizer._fill_merged_cells(df)
 
-            # 4. ENFORCE DATA TYPES
+            # 5. ENFORCE DATA TYPES
             df = DataSanitizer._enforce_types(df)
 
-            # 5. FINAL CLEANUP
+            # 6. FINAL CLEANUP
             df = df.dropna(how='all').reset_index(drop=True)
             
             logger.info(f"✅ [Sanitizer] Success. Columns: {list(df.columns)}")
@@ -76,18 +76,42 @@ class DataSanitizer:
 
     @staticmethod
     def _locate_and_set_header(df: pd.DataFrame) -> pd.DataFrame:
-        best_idx = 0
+        """
+        Smart Header Detection.
+        If existing headers look valid (strings), KEEP THEM.
+        Only scans for new headers if current ones look like garbage (0, 1, 2 or Unnamed).
+        """
+        # 1. Analyze Current Header Quality
+        current_cols = df.columns
+        # Count how many columns are meaningful text (not numbers, not 'unnamed')
+        current_header_score = sum(
+            1 for x in current_cols 
+            if isinstance(x, str) and len(x.strip()) > 0 and "unnamed" not in x.lower() and not str(x).isdigit()
+        )
+        
+        # 🟢 PROTECTION: If >50% of columns are already valid strings, assume header is correct.
+        # This protects data coming from AI Parser (PDFs) which already have headers.
+        # Excel files loaded with header=None will fail this check (cols are 0,1,2), so they will proceed to scan (Correct behavior).
+        if len(current_cols) > 0 and (current_header_score / len(current_cols)) > 0.5:
+            # logger.info("   🛡️  Existing header looks valid. Skipping auto-detection.")
+            return df
+
+        # 2. If Header is bad (0, 1, 2...), Scan for a better one
+        best_idx = -1
         max_text_score = -1
         scan_rows = min(20, len(df))
 
         for i in range(scan_rows):
             row = df.iloc[i]
+            # Score = Number of valid strings that aren't 'nan'
             text_score = sum(1 for x in row if isinstance(x, str) and len(x.strip()) > 0 and "nan" not in x.lower())
             
+            # Prefer higher rows if scores are equal (find the top-most header)
             if text_score > max_text_score:
                 max_text_score = text_score
                 best_idx = i
 
+        # Only promote if we found a row with significantly better text content
         if max_text_score >= 2:
             logger.info(f"   🔧 Dropping {best_idx} rows of metadata. Header found at Row {best_idx}.")
             df.columns = df.iloc[best_idx]
@@ -122,9 +146,9 @@ class DataSanitizer:
     @staticmethod
     def _fill_merged_cells(df: pd.DataFrame) -> pd.DataFrame:
         for col in df.columns:
-            # Safety check for duplicates
-            if isinstance(df[col], pd.DataFrame):
-                continue
+            # Skip if column is somehow a DataFrame (duplicate name issue wrapper)
+            if isinstance(df[col], pd.DataFrame): continue
+            
             if df[col].dtype == object:
                 if df[col].isna().mean() > 0.1:
                     df[col] = df[col].ffill().infer_objects(copy=False)
@@ -144,21 +168,16 @@ class DataSanitizer:
             
         df.columns = new_cols
         
-        # 🟢 CORRECTED DEDUPLICATION LOGIC
+        # Deduplication
         if not df.columns.is_unique:
             logger.info("   🔧 Duplicate headers detected. Renaming...")
             cols = pd.Series(df.columns)
             for dup in cols[cols.duplicated()].unique(): 
-                # Create a mask for where this duplicate exists
                 mask = cols == dup
                 count = mask.sum()
-                # Generate new names: [Station, Station_1, Station_2...]
                 new_names = [dup if i == 0 else f"{dup}_{i}" for i in range(count)]
-                # Assign back safely
                 cols.loc[mask] = new_names
-            
             df.columns = cols
-        
         return df
 
     @staticmethod
