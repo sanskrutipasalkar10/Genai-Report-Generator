@@ -1,6 +1,7 @@
 import requests
 import json
 import os
+import time  # 🟢 Added for sleep/backoff
 from typing import List, Optional, Any
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
 from langchain_core.language_models import BaseChatModel
@@ -9,7 +10,7 @@ from langchain_core.outputs import ChatResult, ChatGeneration
 class OllamaRestChatModel(BaseChatModel):
     """
     A Custom LangChain wrapper that uses the REST API (requests) directly.
-    This bypasses auth issues in standard libraries by allowing full header control.
+    Includes Retry Logic for System Stability (503/Timeout handling).
     """
     model_name: str
     base_url: str = "http://localhost:11434"
@@ -28,45 +29,70 @@ class OllamaRestChatModel(BaseChatModel):
             
             ollama_messages.append({"role": role, "content": msg.content})
 
-        # 2. Prepare Payload (Like in the Notebook)
+        # 2. Prepare Payload
         payload = {
             "model": self.model_name,
             "messages": ollama_messages,
-            "stream": False,  # We want the full response at once for agents
+            "stream": False,
             "options": {
                 "temperature": self.temperature
             }
         }
 
-        # 3. Define Headers (Inject Key if exists)
+        # 3. Define Headers
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        # 4. Send Request (The REST API Call)
+        # 4. Execute with Retry Logic
         endpoint = f"{self.base_url}/api/chat"
         
-        try:
-            print(f"⚡ Sending REST Request to {self.model_name}...")
-            response = requests.post(endpoint, json=payload, headers=headers, timeout=120)
-            response.raise_for_status() # Raise error for 401/500
-            
-            # 5. Parse Response
-            result_json = response.json()
-            content = result_json.get("message", {}).get("content", "")
-            
-            # 6. Return as LangChain Result
-            generation = ChatGeneration(message=AIMessage(content=content))
-            return ChatResult(generations=[generation])
+        # Check Debug Mode
+        debug_mode = os.environ.get("DEBUG_MODE", "False").lower() == "true"
+        if debug_mode:
+            last_msg = ollama_messages[-1]['content'] if ollama_messages else "No content"
+            print(f"\n🧠 [LLM INPUT]: {last_msg[:200]}...\n")
 
-        except requests.exceptions.HTTPError as e:
-            error_msg = f"HTTP Error {e.response.status_code}: {e.response.text}"
-            print(f"❌ {error_msg}")
-            # Return a safe fallback message so the app doesn't crash completely
-            return ChatResult(generations=[ChatGeneration(message=AIMessage(content=f"Error: {error_msg}"))])
-        except Exception as e:
-            print(f"❌ Request Failed: {e}")
-            return ChatResult(generations=[ChatGeneration(message=AIMessage(content=f"Error: {str(e)}"))])
+        # 🟢 RETRY LOOP SETTINGS
+        max_retries = 3
+        backoff_seconds = 3 
+
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    print(f"⚡ Retrying Request ({attempt+1}/{max_retries})...")
+                else:
+                    print(f"⚡ Sending REST Request to {self.model_name}...")
+
+                # Timeout set to 120s to prevent hanging forever
+                response = requests.post(endpoint, json=payload, headers=headers, timeout=120)
+                response.raise_for_status() # Raises Error for 400, 401, 500, 503
+                
+                # 5. Parse Response
+                result_json = response.json()
+                content = result_json.get("message", {}).get("content", "")
+                
+                if debug_mode:
+                    print(f"🤖 [LLM OUTPUT]: {content[:200]}...\n")
+                
+                # Success - Return Result
+                generation = ChatGeneration(message=AIMessage(content=content))
+                return ChatResult(generations=[generation])
+
+            except requests.exceptions.RequestException as e:
+                # 🟢 HANDLE FAILURES
+                print(f"   ⚠️ LLM Connection Failed (Attempt {attempt+1}): {e}")
+                
+                if attempt < max_retries - 1:
+                    print(f"   ⏳ Waiting {backoff_seconds}s before retry...")
+                    time.sleep(backoff_seconds)
+                else:
+                    print("   ❌ Max retries reached. Service Unavailable.")
+                    error_msg = f"Error: AI Analysis Unavailable after {max_retries} attempts. ({e})"
+                    return ChatResult(generations=[ChatGeneration(message=AIMessage(content=error_msg))])
+        
+        # Fallback (Should not be reached due to loop logic, but safe to keep)
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content="Error: Unknown LLM Failure"))])
 
     @property
     def _llm_type(self) -> str:
@@ -76,12 +102,11 @@ def get_llm(model_type="reasoning"):
     """
     Factory function to return our custom REST-based LLM.
     """
-    # 🟢 PASTE YOUR KEY HERE (Using the key you provided)
-    # This ensures it is sent in the headers just in case localhost requires it.
+    # Your API Key
     MY_OLLAMA_KEY = "b3bfd14261204ff2b1d2b4f36a1ecebb.3xPoI7VU9fetGthvocHnHrVs" 
 
     return OllamaRestChatModel(
-        model_name="qwen3-coder:480b-cloud", # Matches your pulled model
+        model_name="qwen3-coder:480b-cloud",
         base_url="http://localhost:11434",
         api_key=MY_OLLAMA_KEY,
         temperature=0.0

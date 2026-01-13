@@ -2,66 +2,83 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import os
+import numpy as np
 
-# Set style for professional reports
+# Set style
 sns.set_theme(style="whitegrid")
 
 def generate_smart_charts(df, output_dir):
     """
-    Analyzes the DataFrame and generates relevant charts automatically.
-    Returns a list of generated image paths to inject into the report.
+    Generates intelligent charts with Data Labels and Garbage Filtering.
     """
     os.makedirs(output_dir, exist_ok=True)
-    generated_charts = []
+    charts = []
     
-    # Identify Column Types
+    # 1. Identify Columns
     num_cols = df.select_dtypes(include=['number']).columns
-    cat_cols = df.select_dtypes(include=['object', 'category']).columns
-    date_cols = df.select_dtypes(include=['datetime']).columns
+    cat_cols = df.select_dtypes(include=['object', 'string']).columns
     
-    # 1. TIME SERIES TRENDS (If Date column exists)
-    if len(date_cols) > 0 and len(num_cols) > 0:
-        date_col = date_cols[0] # Pick primary date column
-        # Aggregate by month/day to avoid noise
-        df_sorted = df.sort_values(by=date_col)
-        
-        for num_col in num_cols[:2]: # Limit to top 2 numeric metrics (e.g., Sales, Revenue)
-            if "id" in num_col.lower(): continue # Skip IDs
+    if len(num_cols) == 0 or len(cat_cols) == 0:
+        return []
+
+    main_cat = cat_cols[0] # e.g., "Metric"
+
+    # 2. FILTER GARBAGE ROWS (Fixes 'nan' and 'Expenses :' in charts)
+    # Remove rows where the text column is null, empty, or specific junk keywords
+    df_clean = df.copy()
+    df_clean = df_clean[df_clean[main_cat].notna()]
+    df_clean = df_clean[~df_clean[main_cat].astype(str).str.match(r'^\s*$', na=False)] # Empty strings
+    df_clean = df_clean[~df_clean[main_cat].astype(str).str.contains(r'Expenses\s*:', case=False, na=False)]
+    df_clean = df_clean[~df_clean[main_cat].astype(str).str.lower().eq('nan')]
+
+    # Limit to top 3 numeric columns
+    target_metrics = num_cols[:3] 
+
+    for metric in target_metrics:
+        try:
+            plt.figure(figsize=(12, 7)) # Wider for text labels
             
-            plt.figure(figsize=(10, 6))
-            sns.lineplot(data=df_sorted, x=date_col, y=num_col, marker='o', linewidth=2.5)
-            plt.title(f"Trend Analysis: {num_col} over Time", fontsize=14)
-            plt.xticks(rotation=45)
+            # STRATEGY: Financial (Direct Plot)
+            # Filter zero values for cleaner chart
+            plot_data = df_clean[df_clean[metric].abs() > 0].copy()
+            
+            # Sort: Highest values on top
+            plot_data = plot_data.sort_values(by=metric, ascending=False).head(12) 
+            
+            if plot_data.empty: continue
+
+            # 🟢 PLOT with Hue to fix Warning
+            ax = sns.barplot(
+                data=plot_data, 
+                x=metric, 
+                y=main_cat, 
+                hue=main_cat, # Assign hue to x or y variable
+                palette="viridis", 
+                legend=False
+            )
+            
+            plt.title(f"{metric} Breakdown", fontsize=14, fontweight='bold')
+            plt.xlabel("Value")
+            plt.ylabel("") 
+
+            # 🟢 ADD DATA LABELS (Values on Bars)
+            # Iterate through the containers (bars) and add labels
+            for container in ax.containers:
+                ax.bar_label(container, fmt='%.0f', padding=3, fontsize=10)
+
+            # Adjust layout to make room for labels
             plt.tight_layout()
             
-            filename = f"trend_{num_col}.png"
-            filepath = os.path.join(output_dir, filename)
-            plt.savefig(filepath)
+            # Save
+            filename = f"{metric}_Analysis.png".replace(" ", "_").replace("/", "")
+            path = os.path.join(output_dir, filename)
+            plt.savefig(path)
             plt.close()
             
-            generated_charts.append((f"Trend of {num_col}", filepath))
+            charts.append((f"{metric} Chart", path))
+            
+        except Exception as e:
+            print(f"⚠️ Chart Error for {metric}: {e}")
+            continue
 
-    # 2. CATEGORICAL DISTRIBUTIONS (Bar Charts)
-    for cat_col in cat_cols:
-        # Only plot if cardinality is reasonable (e.g., < 20 categories)
-        unique_count = df[cat_col].nunique()
-        if 2 <= unique_count <= 20:
-            plt.figure(figsize=(10, 6))
-            # Get top 10 values
-            top_vals = df[cat_col].value_counts().head(10)
-            # Updated to avoid FutureWarning
-            sns.barplot(x=top_vals.values, y=top_vals.index, hue=top_vals.index, palette="viridis", legend=False)
-            plt.title(f"Distribution by {cat_col}", fontsize=14)
-            plt.xlabel("Count")
-            plt.tight_layout()
-            
-            filename = f"dist_{cat_col}.png"
-            filepath = os.path.join(output_dir, filename)
-            plt.savefig(filepath)
-            plt.close()
-            
-            generated_charts.append((f"Distribution of {cat_col}", filepath))
-            
-            if len(generated_charts) > 5: break # Cap at 5 charts max
-
-    return generated_charts
+    return charts

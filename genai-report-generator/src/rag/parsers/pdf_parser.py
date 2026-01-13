@@ -1,28 +1,25 @@
 import pdfplumber
 import pandas as pd
+import logging
 from typing import Tuple, Dict
-import pdfplumber
-import pandas as pd
-import logging  # <--- Add this
 
-# 🟢 SILENCE WARNINGS: This stops the console spam
+# 🟢 SILENCE WARNINGS: Stops pdfminer console spam
 logging.getLogger("pdfminer").setLevel(logging.ERROR)
 
-from typing import Tuple, Dict
-
-# ... rest of your code ...
-
-def parse_hybrid_pdf(file_path: str) -> Tuple[str, Dict[str, pd.DataFrame]]:
+def parse_pdf(file_path: str) -> Tuple[str, Dict[str, pd.DataFrame]]:
     """
     Extracts text and filters for high-quality data tables from PDF.
+    Returns raw DataFrames (no headers set) for the Sanitizer to clean.
     """
     full_text = ""
     tables = {}
     table_count = 0
 
+    print(f"   📄 Parsing PDF: {file_path}")
+
     try:
         with pdfplumber.open(file_path) as pdf:
-            print(f"   📄 Scanning {len(pdf.pages)} pages in PDF...")
+            print(f"      Scanning {len(pdf.pages)} pages...")
             
             for i, page in enumerate(pdf.pages):
                 # 1. Extract Text
@@ -38,6 +35,7 @@ def parse_hybrid_pdf(file_path: str) -> Tuple[str, Dict[str, pd.DataFrame]]:
                         continue
                         
                     # --- 🟢 HEURISTIC FILTERING ---
+                    
                     # Rule 1: Minimum Size (2x2)
                     if len(table_data) < 2 or len(table_data[0]) < 2:
                         continue
@@ -45,32 +43,31 @@ def parse_hybrid_pdf(file_path: str) -> Tuple[str, Dict[str, pd.DataFrame]]:
                     # Clean data: Replace None with ""
                     clean_data = [[cell if cell is not None else "" for cell in row] for row in table_data]
                     
-                    # Rule 2: Header sanity check
-                    # If the first row is massive text blocks, it's likely layout, not a header
+                    # Rule 2: Layout Check
+                    # If the first row is massive text blocks (>500 chars), it's likely layout text, not a table header
                     if len(str(clean_data[0])) > 1000:
                         continue
 
                     try:
-                        header = clean_data[0]
-                        # Handle duplicate headers
-                        header = [f"{col}_{j}" if header.count(col) > 1 else col for j, col in enumerate(header)]
-                        
-                        df = pd.DataFrame(clean_data[1:], columns=header)
+                        # 🟢 CRITICAL CHANGE: No Header Assignment
+                        # We pass the raw grid to DataSanitizer
+                        df = pd.DataFrame(clean_data)
                         
                         # Rule 3: Numerical Density
-                        # Check if at least one cell has a number
+                        # Financial tables must have digits
                         has_numbers = df.astype(str).apply(lambda x: x.str.contains(r'\d', na=False)).any().any()
                         
                         if has_numbers:
                             table_count += 1
-                            tables[f"PDF_Table_{table_count}"] = df
+                            # Name tables by Page Number helps context
+                            tables[f"Page_{i+1}_Table_{table_count}"] = df
                             
                     except Exception as e:
                         continue
 
-        print(f"   ✅ Extracted {len(tables)} Valid Tables (Filtered out junk).")
+        print(f"      ✅ Extracted {len(tables)} Valid Tables from PDF.")
         return full_text, tables
 
     except Exception as e:
-        print(f"❌ PDF Parse Error: {e}")
+        print(f"   ❌ PDF Parse Error: {e}")
         return "", {}
