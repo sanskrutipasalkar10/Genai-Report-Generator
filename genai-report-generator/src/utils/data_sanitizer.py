@@ -25,8 +25,17 @@ class DataSanitizer:
         try:
             # 1. LOAD RAW DATA
             if file_path.endswith('.csv'):
-                # Read without header first to detect it statistically later
-                df = pd.read_csv(file_path, header=None, engine='python')
+                try:
+                    # Attempt 1: Standard Load
+                    # Read without header first to detect it statistically later
+                    df = pd.read_csv(file_path, header=None, engine='python')
+                except Exception:
+                    # Attempt 2: Ragged Load (Fix for "Expected 1 fields, saw 4")
+                    # We incorrectly tell pandas there are 50 columns. 
+                    # This stops it from crashing on uneven rows.
+                    logger.warning("   ⚠️ Ragged CSV detected. Switching to 'Wide Load' mode.")
+                    df = pd.read_csv(file_path, header=None, engine='python', names=list(range(50)))
+            
             elif file_path.endswith(('.xls', '.xlsx')):
                 df = pd.read_excel(file_path, header=None)
             else:
@@ -48,6 +57,9 @@ class DataSanitizer:
         """
         try:
             if df.empty: return df
+            
+            # 0. PRE-CLEAN: Drop columns that are completely empty (Important for 'Wide Load' CSVs)
+            df = df.dropna(axis=1, how='all')
 
             # 1. LOCATE REAL HEADER (With Protection for Existing Headers)
             df = DataSanitizer._locate_and_set_header(df)
