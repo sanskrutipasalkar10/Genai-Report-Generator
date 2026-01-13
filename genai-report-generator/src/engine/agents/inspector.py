@@ -1,7 +1,11 @@
 import json
 import re
+import logging
 import pandas as pd
 from src.engine.llm import get_llm
+from langchain_core.messages import HumanMessage
+
+logger = logging.getLogger(__name__)
 
 class InspectorAgent:
     def __init__(self):
@@ -9,102 +13,105 @@ class InspectorAgent:
 
     def inspect_and_plan(self, df: pd.DataFrame) -> dict:
         """
-        Analyzes a CLEANED DataFrame and generates an execution plan.
+        Analyzes a CLEANED DataFrame and generates a comprehensive execution plan.
         """
         print(f"--- 🕵️ Inspector Agent: Analyzing Schema ({len(df)} rows, {len(df.columns)} cols) ---")
         
-        # 1. Prepare Context for LLM
-        # We don't send the whole file. We send the structure.
-        columns = list(df.columns)
-        dtypes = df.dtypes.to_dict()
-        
-        # Convert dtypes to string representation for JSON serialization
-        dtypes_str = {k: str(v) for k, v in dtypes.items()}
-        
-        # Get a markdown sample (first 3 rows) to show the LLM what the data looks like
-        try:
-            sample_data = df.head(3).to_markdown(index=False)
-        except ImportError:
-            sample_data = df.head(3).to_string(index=False)
+        # 1. Identify Column Types for Context
+        # We pre-calculate this to give the LLM a head start
+        date_cols = [col for col in df.columns if 'date' in col.lower() or 'time' in col.lower() or 'year' in col.lower()]
+        cat_cols = list(df.select_dtypes(include=['object', 'category']).columns)
+        num_cols = list(df.select_dtypes(include=['number']).columns)
 
-        # 2. Generalized Prompt
-        # This works for ANY file because it asks for abstract "Dimensions" and "Metrics"
+        # 2. Prepare Context for LLM
+        schema_info = {
+            "columns": list(df.columns),
+            "primary_id": df.columns[0], # Usually the first column is the ID/Key
+            "date_columns": date_cols,
+            "categorical_columns": cat_cols,
+            "numeric_columns": num_cols,
+            "sample_data": df.head(3).to_dict(orient='records')
+        }
+        
+        # 3. Comprehensive Prompt
+        # Forces the LLM to look for Trends, Rankings, and Primary Key analysis.
         prompt = f"""
-        You are a Senior Data Architect. Analyze this CLEANED dataset structure.
+        You are a Senior Data Architect. Analyze this CLEANED dataset structure and generate a COMPREHENSIVE Analysis Plan.
 
         ### DATA CONTEXT
-        - **Columns:** {columns}
-        - **Data Types:** {dtypes_str}
-        - **Sample Data:**
-        {sample_data}
+        - **Primary Key/ID:** '{schema_info['primary_id']}'
+        - **Numeric Metrics:** {schema_info['numeric_columns']}
+        - **Categorical Dimensions:** {schema_info['categorical_columns']}
+        - **Time Dimensions:** {schema_info['date_columns']}
+        - **Sample Data:** {json.dumps(schema_info['sample_data'], indent=2, default=str)}
 
         ### TASK
-        You must create a plan for a Python Analyst to generate insights.
-        
-        1. **Classify Dataset:**
-           - "TRANSACTIONAL" (Events, Sales, Logs -> Row-by-row data)
-           - "FINANCIAL_STATEMENT" (P&L, Balance Sheet -> Pre-aggregated metrics)
-           
-        2. **Identify Variables:**
-           - **Dimensions:** Categorical columns useful for grouping (e.g., Region, Product, Date, Metric Name).
-           - **Metrics:** Numeric columns useful for math (e.g., Amount, Quantity, Count).
+        Generate a JSON object containing a detailed analysis strategy.
+        Do NOT limit yourself to 3 questions. Generate as many relevant questions as the data supports (up to 8).
 
-        3. **Generate 3 Analysis Questions:**
-           - Create 3 specific questions that can be answered using GroupBy and Sum/Mean.
-           - Example: "Calculate Total [Metric] by [Dimension]"
-
-        4. **SEMANTIC CLASSIFICATION (Crucial):**
-           - Identify which rows represent **INCOME/REVENUE** (Positive flow).
-           - Identify which rows represent **EXPENSES/COSTS** (Negative flow).
-           - Identify which rows are **AGGREGATES** (e.g., "Total", "EBITDA", "Profit") vs **RAW ITEMS**.
-           
-        5. **GENERATE CONSTRAINTS:**
-           - If calculating 'Total Revenue', explicitly state: "Filter rows where Metric contains 'Revenue'. Do NOT sum the whole column."
-           - If calculating 'Margins', explicitly state: "Use the row labeled 'EBITDA' or 'Margin'. Do not recalculate unless necessary."
+        ### STRATEGY GUIDELINES:
+        1. **Primary Entity Analysis:** Always start by analyzing the Primary Key (e.g., "Total Quantity by {schema_info['primary_id']}").
+        2. **Dimensional Breakdowns:** For every major categorical column (Region, Shift, Station, Dept), ask for a breakdown of the key metrics.
+        3. **Time Series (If Applicable):** If 'Time Dimensions' exist, MUST ask for "Trend of [Metric] over Time/Month/Year".
+        4. **Distribution/Rankings:** Ask for "Top 5" and "Bottom 5" performers.
+        5. **Financial Logic:** If dataset is FINANCIAL, identify Income vs Expense rows.
 
         ### OUTPUT FORMAT (Strict JSON)
         Return ONLY valid JSON. No markdown.
         {{
-            "dataset_type": "TRANSACTIONAL" or "FINANCIAL_STATEMENT",
-            "primary_dimensions": ["col_name_1", "col_name_2"],
-            "primary_metrics": ["col_name_3", "col_name_4"],
+            "dataset_type": "TRANSACTIONAL" | "FINANCIAL_STATEMENT" | "INVENTORY",
+            "primary_dimensions": ["list", "of", "cols"],
+            "primary_metrics": ["list", "of", "cols"],
             "analysis_questions": [
-                "Question 1",
-                "Question 2",
-                "Question 3"
+                "1. Calculate Total [Metric] by {schema_info['primary_id']} (Primary Breakdown)",
+                "2. Analyze [Metric] distribution across [Category Column]",
+                "3. Trend of [Metric] over [Date Column]",
+                "4. Identify Top 10 {schema_info['primary_id']} by [Metric]"
             ]
         }}
         """
 
-        # 3. Invoke LLM
-        response = self.llm.invoke(prompt)
-        content = response.content.strip()
-
-        # 4. Parse JSON with Retry Logic
+        # 4. Invoke LLM
         try:
+            messages = [HumanMessage(content=prompt)]
+            response = self.llm.invoke(messages)
+            content = response.content.strip()
+
+            # 5. Parse JSON with Retry Logic
             # Extract JSON from potential markdown blocks ```json ... ```
             json_match = re.search(r"\{.*\}", content, re.DOTALL)
             if json_match:
                 plan = json.loads(json_match.group(0))
-                print(f"   ✅ Plan Generated: {plan['dataset_type']} with {len(plan['analysis_questions'])} questions.")
+                
+                # Sanity Check: Ensure 'analysis_questions' is a list
+                if not isinstance(plan.get('analysis_questions'), list):
+                    # Try to fix it if it's a string
+                    if isinstance(plan.get('analysis_questions'), str):
+                        plan['analysis_questions'] = [plan['analysis_questions']]
+                    else:
+                        raise ValueError("LLM returned malformed questions list")
+
+                print(f"   ✅ Plan Generated: {plan.get('dataset_type', 'Unknown')} with {len(plan['analysis_questions'])} distinct analyses.")
                 return plan
             else:
                 raise ValueError("No JSON block found")
 
         except Exception as e:
-            print(f"   ⚠️ Inspection Parse Error: {e}. Falling back to default plan.")
+            logger.error(f"Inspector Parse Error: {e}. Falling back to default plan.")
             return self._get_fallback_plan(df)
 
     def _get_fallback_plan(self, df):
         """
-        If LLM fails, generate a stupid simple plan based on column types.
+        If LLM fails, generate a simple plan based on column types.
         """
         numerics = list(df.select_dtypes(include=['number']).columns)
         objects = list(df.select_dtypes(include=['object', 'string']).columns)
         
         return {
-            "dataset_type": "UNKNOWN",
+            "dataset_type": "GENERIC",
             "primary_dimensions": objects[:2], # Take first 2 text cols
             "primary_metrics": numerics[:2],   # Take first 2 number cols
-            "analysis_questions": [f"Calculate sum of {numerics[0]} by {objects[0]}"] if numerics and objects else []
+            "analysis_questions": [
+                f"Calculate Sum of {numerics[0]} by {objects[0]}" if numerics and objects else "Count rows"
+            ]
         }
