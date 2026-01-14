@@ -16,6 +16,10 @@ class OllamaRestChatModel(BaseChatModel):
     base_url: str = "http://localhost:11434"
     temperature: float = 0.0
     api_key: Optional[str] = None
+    
+    # 🟢 NEW CONFIGURATIONS FOR LARGE DATASETS
+    timeout: int = 360      # Increased default to 6 minutes
+    num_ctx: int = 8192     # Increased context window for large inputs
 
     def _generate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs: Any) -> ChatResult:
         # 1. Convert LangChain Messages to Ollama API Format
@@ -35,7 +39,8 @@ class OllamaRestChatModel(BaseChatModel):
             "messages": ollama_messages,
             "stream": False,
             "options": {
-                "temperature": self.temperature
+                "temperature": self.temperature,
+                "num_ctx": self.num_ctx  # 🟢 Pass context window size to API
             }
         }
 
@@ -64,8 +69,8 @@ class OllamaRestChatModel(BaseChatModel):
                 else:
                     print(f"⚡ Sending REST Request to {self.model_name}...")
 
-                # Timeout set to 120s to prevent hanging forever
-                response = requests.post(endpoint, json=payload, headers=headers, timeout=120)
+                # 🟢 USE SELF.TIMEOUT (360s)
+                response = requests.post(endpoint, json=payload, headers=headers, timeout=self.timeout)
                 response.raise_for_status() # Raises Error for 400, 401, 500, 503
                 
                 # 5. Parse Response
@@ -109,5 +114,8 @@ def get_llm(model_type="reasoning"):
         model_name="qwen3-coder:480b-cloud",
         base_url="http://localhost:11434",
         api_key=MY_OLLAMA_KEY,
-        temperature=0.0
+        temperature=0.0,
+        # 🟢 OVERRIDE DEFAULTS HERE
+        timeout=360,      # 6 Minutes timeout
+        num_ctx=8192      # Large context window for big Excel files
     )

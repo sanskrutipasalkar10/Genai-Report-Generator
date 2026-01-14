@@ -12,72 +12,56 @@ logging.getLogger("pdfminer").setLevel(logging.ERROR)
 
 def parse_pdf(file_path: str) -> Tuple[str, Dict[str, pd.DataFrame]]:
     """
-    Production-Grade PDF Parser with AGGRESSIVE VALIDATION.
-    1. Tries Standard Extraction.
-    2. SCANS FOR "BAD SLICES" (Partial words like 'nsit', 'Tra').
-    3. Fallback: AI Repair if any garbage is detected.
+    Universal "LLM-First" PDF Parser with NUMERIC FIREWALL.
+    
+    Logic:
+    1. Extract Raw Text (Layout Preserved).
+    2. Filter: Skip pages with no "Business Data" (numbers) to save cost.
+    3. Extract: AI converts Text -> CSV directly (No standard parser used).
+    4. FIREWALL: Rejects any table where AI numbers do not match source text.
     """
     full_text = ""
     tables = {}
     table_count = 0
     llm = get_llm()
 
-    print(f"   📄 Parsing PDF: {file_path}")
+    print(f"   📄 Parsing PDF (LLM-Only Mode): {file_path}")
 
     try:
         with pdfplumber.open(file_path) as pdf:
             print(f"      Scanning {len(pdf.pages)} pages...")
             
             for i, page in enumerate(pdf.pages):
-                text = page.extract_text()
-                if text:
-                    full_text += f"--- Page {i+1} ---\n{text}\n\n"
-
-                # PHASE 1: STANDARD EXTRACTION
-                strategies = [
-                    {"vertical_strategy": "lines", "horizontal_strategy": "lines"}, 
-                    {"vertical_strategy": "text", "horizontal_strategy": "text"},   
-                ]
+                # 1. Get Raw Text (Preserve physical layout)
+                # This helps the LLM see the 'shape' of the table
+                text = page.extract_text(layout=True)
+                if not text: continue
                 
-                valid_df = None
-                for settings in strategies:
-                    try:
-                        found = page.extract_tables(table_settings=settings)
-                        if found:
-                            # Iterate through found tables
-                            for table_data in found:
-                                raw_df = pd.DataFrame(table_data)
-                                # 🟢 AGGRESSIVE VALIDATION
-                                if _is_valid_table(raw_df):
-                                    valid_df = raw_df
-                                    break
-                            if valid_df is not None: break
-                    except: continue
+                full_text += f"--- Page {i+1} ---\n{text}\n\n"
 
-                # PHASE 2: AI REPAIR (Triggered if Valid DF is still None)
-                if valid_df is None and text and _text_looks_like_data(text):
-                    print(f"      ⚠️ Page {i+1}: Standard parse rejected (Bad Slices Detected). Engaging AI Repair...")
-                    
-                    ai_df = _extract_via_llm(llm, text)
-                    if ai_df is not None:
-                        if _validate_numbers(text, ai_df):
-                            valid_df = ai_df
-                            print(f"      ✅ AI Output Validated (Numbers match source).")
-                        else:
-                            print(f"      ❌ AI Hallucination Detected! Discarding unsafe table.")
+                # 2. Pre-Filter: Does this page even have data?
+                # Optimization: Don't send legal text or cover pages to the LLM.
+                if not _page_has_data_potential(text):
+                    # print(f"      Skipping Page {i+1} (No numerical data detected)")
+                    continue
 
-                # PHASE 3: SAVE
-                if valid_df is not None:
-                    try:
+                print(f"      🧠 Page {i+1} has potential data. Asking AI to extract...")
+                
+                # 3. AI Extraction (The Core Logic)
+                ai_df = _extract_via_llm(llm, text)
+                
+                # 4. THE FIREWALL (Anti-Hallucination Validation)
+                if ai_df is not None and not ai_df.empty:
+                    if _validate_numbers(text, ai_df):
+                        table_count += 1
                         # Normalize headers
-                        valid_df.columns = [str(c).strip() for c in valid_df.columns]
-                        has_numbers = valid_df.astype(str).apply(lambda x: x.str.contains(r'\d', na=False)).any().any()
-                        if has_numbers:
-                            table_count += 1
-                            tables[f"Page_{i+1}_Table_{table_count}"] = valid_df
-                    except: pass
+                        ai_df.columns = [str(c).strip() for c in ai_df.columns]
+                        tables[f"Page_{i+1}_Table_{table_count}"] = ai_df
+                        print(f"      ✅ Extracted & Verified Table {table_count}")
+                    else:
+                        print(f"      ❌ AI Hallucination Blocked. (Numbers in output do not match source text)")
 
-        print(f"      ✅ Extracted {len(tables)} Valid Tables.")
+        print(f"      ✅ Final Count: {len(tables)} Valid Tables.")
         return full_text, tables
 
     except Exception as e:
@@ -86,87 +70,86 @@ def parse_pdf(file_path: str) -> Tuple[str, Dict[str, pd.DataFrame]]:
 
 # --- HELPER FUNCTIONS ---
 
-def _is_valid_table(df: pd.DataFrame) -> bool:
+def _page_has_data_potential(text: str) -> bool:
     """
-    Aggressively rejects tables with "Bad Slices" (partial words).
+    Heuristic: A financial/inventory table must have at least 3 distinct numbers.
+    This prevents sending pages of just text (Introduction, Legal) to the LLM.
     """
-    if df.empty or len(df) < 2 or len(df.columns) < 2: return False
+    nums = re.findall(r'\d+', text)
+    return len(set(nums)) >= 3
+
+def _extract_via_llm(llm, text_chunk: str) -> pd.DataFrame:
+    """
+    Directly asks LLM to find the table in the text layout.
+    """
+    prompt = f"""
+    You are a Strict Data Extraction Engine.
+    Analyze the text layout below.
     
-    # 🟢 NEW: SCAN TOP 5 ROWS (Not just Row 0)
-    # The header might be on Row 2 or 3. We check them all.
-    rows_to_scan = 5
-    scan_limit = min(len(df), rows_to_scan)
+    TASK:
+    1. Identify if there is a STRUCTURED DATA TABLE (Rows & Columns).
+    2. If YES: Extract it as a standard CSV.
+    3. If NO (e.g. it's just sentences, legal text, or lists): Output "NO_DATA".
     
-    # BAD KEYWORDS: Common fragments from bad PDF slicing
-    # 'nsit' -> from Transit
-    # 'Tra' -> from Transit
-    # 'n_Hand' -> from On_Hand
-    # 'ui' -> from Require
-    bad_fragments = ["nsit", "n_Hand", "Tra_", "_Tra", "ock_On", "ui_"]
+    CRITICAL RULES:
+    - EXACT MATCH: Do not change any numbers.
+    - Do not extract page numbers, headers, or footers as data.
+    - Fix merged headers (e.g. "Stock On Hand" -> "Stock_On_Hand").
     
-    for i in range(scan_limit):
-        row_str = " ".join(df.iloc[i].astype(str)).lower()
+    TEXT CONTENT:
+    {text_chunk[:3500]}
+    """
+    try:
+        response = llm.invoke([HumanMessage(content=prompt)])
+        content = response.content.strip()
         
-        # 1. Check for Bad Fragments
-        for bad in bad_fragments:
-            if bad in row_str:
-                # print(f"         🚫 Rejected: Found bad fragment '{bad}' in Row {i}")
-                return False
-
-        # 2. Check for Lowercase Starters (e.g. "hand", "transit" in a Header row)
-        # If a cell starts with lowercase but is not 'unnamed', it's suspicious in a header
-        for cell in df.iloc[i].astype(str):
-            cell = cell.strip()
-            if len(cell) > 3 and cell[0].islower() and "unnamed" not in cell.lower() and not cell.replace('.','').isdigit():
-                # Only strict if it looks like a word
-                if cell.isalpha():
-                    # print(f"         🚫 Rejected: Lowercase header '{cell}' detected.")
-                    return False
-
-    return True
-
-def _text_looks_like_data(text: str) -> bool:
-    digit_count = sum(c.isdigit() for c in text)
-    return digit_count > 10
+        # Check for refusal
+        if "NO_DATA" in content or "no structured data" in content.lower():
+            return None
+            
+        # Clean Markdown
+        if "```" in content:
+            content = content.replace("```csv", "").replace("```", "").strip()
+            
+        df = pd.read_csv(io.StringIO(content))
+        
+        # Sanity Check: A table must have at least 1 row and 2 columns
+        if len(df) < 1 or len(df.columns) < 2:
+            return None
+            
+        return df
+    except: return None
 
 def _extract_numbers_from_string(s: str) -> set:
-    s_clean = s.replace(',', '')
+    """
+    Extracts all numbers (integers and floats) from a string for validation.
+    """
+    s_clean = str(s).replace(',', '')
     matches = re.findall(r'-?\d+\.?\d*', s_clean)
     return {float(x) for x in matches}
 
 def _validate_numbers(raw_text: str, df: pd.DataFrame) -> bool:
+    """
+    The Hallucination Firewall.
+    Returns False if the AI invented 'Business Numbers' (> 50) that don't exist in the source text.
+    """
     raw_numbers = _extract_numbers_from_string(raw_text)
+    
+    # Get all numbers from the AI's output dataframe
     df_text = df.to_string(index=False, header=False)
     ai_numbers = _extract_numbers_from_string(df_text)
     
     if not ai_numbers: return False 
     
+    # Check: Are there numbers in AI that are NOT in Source?
     hallucinations = ai_numbers - raw_numbers
+    
+    # Filter out trivial mismatches (like 1 vs 1.0, or small integers < 50 that might be dates/IDs)
+    # We care about "Business Numbers" (Values > 50) being invented.
     critical_hallucinations = [h for h in hallucinations if abs(h) > 50]
     
     if critical_hallucinations:
-        print(f"         🚨 Blocked Numbers: {critical_hallucinations}")
+        print(f"         🚨 Blocked Hallucination: {critical_hallucinations}")
         return False
         
     return True
-
-def _extract_via_llm(llm, text_chunk: str) -> pd.DataFrame:
-    prompt = f"""
-    You are a Strict Data Extraction Engine.
-    Convert the following text into CSV format.
-    
-    RULES:
-    1. EXACT MATCH: Do not change any numbers.
-    2. Structure: Fix merged headers. e.g. "Stock On Hand" is ONE column. "In Transit" is ONE column.
-    3. Output ONLY the CSV data.
-    
-    TEXT:
-    {text_chunk[:2500]}
-    """
-    try:
-        response = llm.invoke([HumanMessage(content=prompt)])
-        csv_content = response.content.strip()
-        if "```" in csv_content:
-            csv_content = csv_content.replace("```csv", "").replace("```", "").strip()
-        return pd.read_csv(io.StringIO(csv_content))
-    except: return None
