@@ -4,6 +4,7 @@ import argparse
 import pandas as pd
 import json
 import logging
+from langchain_core.messages import HumanMessage
 
 # --- SETUP & LOGGING ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
@@ -24,7 +25,8 @@ from src.engine.agents.analyst import AnalystAgent
 from src.engine.agents.writer import writer_agent
 from src.utils.viz_utils import generate_smart_charts
 from src.rag.file_loader import load_file
-from src.engine.llm import get_llm
+from src.engine.llm import get_llm, get_vision_model 
+from src.utils.image_extractor import extract_images_from_file 
 
 def run_summary_agent(insights):
     """
@@ -45,61 +47,93 @@ def run_summary_agent(insights):
     """
     return llm.invoke(prompt).content
 
+def run_visual_analysis(file_path):
+    """
+    Extracts images and uses Vision Model to describe them.
+    """
+    print("\n--- PHASE 1.5: VISUAL ANALYSIS (Vision Model) ---")
+    visual_report = ""
+    
+    # 1. Extract Images
+    print(f"   👁️ Scanning {os.path.basename(file_path)} for embedded images...")
+    images_b64 = extract_images_from_file(file_path)
+    
+    if not images_b64:
+        print("      No extractable images found.")
+        return ""
+    
+    print(f"      Found {len(images_b64)} images. Analyzing with qwen3-vl...")
+    
+    # 2. Analyze with Vision Model
+    vision_llm = get_vision_model()
+    
+    for i, img_b64 in enumerate(images_b64):
+        print(f"      🖼️ Processing Image {i+1}/{len(images_b64)}...")
+        
+        # Prepare Multimodal Message
+        msg_content = {
+            "text": "Analyze this image for a business report. Describe charts, trends, or key details visible.",
+            "image_base64": img_b64
+        }
+        
+        try:
+            # Wrap dictionary in a list to satisfy HumanMessage validation
+            response = vision_llm.invoke([HumanMessage(content=[msg_content])])
+            desc = response.content
+            visual_report += f"\n**Visual Exhibit {i+1} Analysis:**\n{desc}\n"
+        except Exception as e:
+            logger.error(f"      ❌ Failed to analyze image {i+1}: {e}")
+            
+    return visual_report
+
 def main(file_path):
     print(f"\n🎬 [Pipeline] Starting: {file_path}")
     
     # ---------------------------------------------------------
-    # 1. INGEST & SANITIZE (The "Janitor")
+    # 1. INGEST & SANITIZE 
     # ---------------------------------------------------------
     print("\n--- PHASE 1: SANITIZATION (Python) ---")
-    
-    # Try loading as text/tables first (for PDF/DOCX or Excel via Parser)
     raw_text, tables, _ = load_file(file_path)
-    
     df = pd.DataFrame()
     
-    # PATH A: TABLES FOUND VIA LOADER
     if tables:
         print("   🚿 Sanitizing Extracted Tables...")
-        # Handle if tables is List or Dict
         raw_df = tables[0] if isinstance(tables, list) else list(tables.values())[0]
-        
-        # 🟢 CRITICAL FIX: Use the FULL pipeline on the dataframe
-        # This ensures we run Header Detection on extracted tables too
         df = DataSanitizer.clean_dataframe(raw_df)
         
-    # PATH B: STRICT LOAD (Fallback for Excel/CSV if loader return empty/bad structure)
     if df.empty:
         print("   🚿 Running Strict File Sanitization...")
         df = DataSanitizer.clean_file(file_path)
 
     # ---------------------------------------------------------
-    # PATH C: PROCESS VALID DATA
+    # 1.5 VISUAL ANALYSIS (The New Feature)
     # ---------------------------------------------------------
+    # Run this regardless of whether tabular data was found
+    visual_analysis_text = run_visual_analysis(file_path)
+
+    # ---------------------------------------------------------
+    # PROCESS VALID DATA
+    # ---------------------------------------------------------
+    full_context = ""
+    charts = []
+
+    # PATH A: Structured Data (Excel/CSV/Table)
     if not df.empty:
-        # 2. INSPECT (The "Architect")
         print("\n--- PHASE 2: INSPECTION (LLM) ---")
         inspector = InspectorAgent()
         plan = inspector.inspect_and_plan(df)
         
-        # 3. ANALYZE (The "Executor")
         print("\n--- PHASE 3: ANALYSIS (Code) ---")
         analyst = AnalystAgent()
         insights, _ = analyst.perform_analysis(df, plan)
         
-        # 4. SUMMARIZE
         print("\n--- PHASE 4: SUMMARIZATION ---")
-        if "Analysis Failed" in insights:
-            summary = "Automated analysis could not be completed due to execution errors."
-        else:
-            summary = run_summary_agent(insights)
+        summary = run_summary_agent(insights)
             
-        # 5. VISUALIZE
         print("\n--- PHASE 5: VISUALIZATION ---")
         charts = generate_smart_charts(df, IMAGES_DIR)
         print(f"   ✅ Generated {len(charts)} charts.")
         
-        # Prepare Context for Final Report
         full_context = f"""
         EXECUTIVE SUMMARY:
         {summary}
@@ -107,13 +141,14 @@ def main(file_path):
         DETAILED FINDINGS:
         {insights}
         
-        VISUAL EVIDENCE:
+        VISUAL ANALYSIS (FROM EMBEDDED IMAGES):
+        {visual_analysis_text}
+        
+        GENERATED CHARTS:
         Attached {len(charts)} charts.
         """
 
-    # ---------------------------------------------------------
-    # PATH D: TEXT ONLY MODE (Brochures/Docs)
-    # ---------------------------------------------------------
+    # PATH B: Text Documents (PDF/Docx with Text)
     elif raw_text and len(raw_text) > 50:
         print("\nℹ️ No structured data found. Switching to Text Mode.")
         summary = run_summary_agent(raw_text[:5000])
@@ -121,12 +156,31 @@ def main(file_path):
         EXECUTIVE SUMMARY:
         {summary}
         
+        VISUAL ANALYSIS (FROM EMBEDDED IMAGES):
+        {visual_analysis_text}
+        
         DOCUMENT CONTENT:
         {raw_text[:15000]}
         """
-        charts = []
+        
+    # PATH C: Image-Only Documents (Scanned PDFs / Charts) - 🟢 NEW
+    elif visual_analysis_text:
+        print("\nℹ️ No Text/Tables found, but Visual Analysis is available. Generating Image-Based Report.")
+        summary = run_summary_agent(visual_analysis_text)
+        full_context = f"""
+        EXECUTIVE SUMMARY:
+        {summary}
+        
+        VISUAL ANALYSIS (FROM EMBEDDED IMAGES):
+        {visual_analysis_text}
+        
+        NOTE:
+        This report is based solely on the visual analysis of images found in the document, 
+        as no extractable text or tabular data was detected.
+        """
+        
     else:
-        print("❌ Error: File contains no readable text or tables.")
+        print("❌ Error: File contains no readable text, tables, or images.")
         return
 
     # ---------------------------------------------------------
@@ -137,7 +191,7 @@ def main(file_path):
     
     # Append Visuals
     if charts:
-        report += "\n## Visual Analytics\n" + "\n".join([f"![{n}]({os.path.relpath(p, ARTIFACTS_DIR).replace(os.sep, '/')})" for n,p in charts])
+        report += "\n## Generated Analytics\n" + "\n".join([f"![{n}]({os.path.relpath(p, ARTIFACTS_DIR).replace(os.sep, '/')})" for n,p in charts])
 
     # Save Markdown
     out_name = f"{os.path.basename(file_path)}_report.md"
@@ -158,8 +212,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("file_path")
     args = parser.parse_args()
-    
-    # Ensure debug mode is on for LLM visibility
     os.environ["DEBUG_MODE"] = "True"
-    
     main(args.file_path)
