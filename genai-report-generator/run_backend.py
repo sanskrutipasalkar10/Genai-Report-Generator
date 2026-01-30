@@ -3,7 +3,6 @@ import os
 import uvicorn
 
 # 1. Force the current script's directory (Root) into Python's path
-# This makes sure Python sees the 'src' folder right next to this script.
 root_dir = os.path.dirname(os.path.abspath(__file__))
 if root_dir not in sys.path:
     sys.path.append(root_dir)
@@ -11,8 +10,8 @@ if root_dir not in sys.path:
 print(f"📂 Execution Path: {root_dir}")
 
 # 2. Import the app object DIRECTLY
-# We do this inside a try-block to catch the error instantly if it fails
 try:
+    # This looks for src/app_api.py and imports the 'app' variable
     from src.app_api import app
     print("✅ Successfully imported FastAPI app.")
 except ImportError as e:
@@ -27,6 +26,5 @@ except ImportError as e:
 
 if __name__ == "__main__":
     print("🚀 Starting Server on Port 8000...")
-    # NOTICE: We pass the 'app' OBJECT, not the string "src.app_api:app"
-    # This prevents the 'Could not import module' error.
+    # Serve the app
     uvicorn.run(app, host="0.0.0.0", port=8000)

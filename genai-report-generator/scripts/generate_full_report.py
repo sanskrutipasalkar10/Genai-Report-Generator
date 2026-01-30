@@ -4,6 +4,7 @@ import argparse
 import pandas as pd
 import json
 import logging
+import base64 
 from langchain_core.messages import HumanMessage
 
 # --- SETUP & LOGGING ---
@@ -14,9 +15,12 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.append(project_root)
 
+# 🟢 CRITICAL FIX: Flatten the folder structure. 
+# We set IMAGES_DIR to be the same as ARTIFACTS_DIR.
+# This ensures charts, extracted images, and the report all live side-by-side.
 ARTIFACTS_DIR = os.path.join(project_root, "data", "artifacts")
-IMAGES_DIR = os.path.join(ARTIFACTS_DIR, "images")
-os.makedirs(IMAGES_DIR, exist_ok=True)
+IMAGES_DIR = ARTIFACTS_DIR 
+os.makedirs(ARTIFACTS_DIR, exist_ok=True)
 
 # --- IMPORT MODULES ---
 from src.utils.data_sanitizer import DataSanitizer
@@ -49,10 +53,12 @@ def run_summary_agent(insights):
 
 def run_visual_analysis(file_path):
     """
-    Extracts images and uses Vision Model to describe them.
+    Extracts images, SAVES THEM TO DISK, and uses Vision Model to describe them.
+    Returns: (analysis_text, list_of_saved_image_paths)
     """
     print("\n--- PHASE 1.5: VISUAL ANALYSIS (Vision Model) ---")
     visual_report = ""
+    saved_img_paths = [] 
     
     # 1. Extract Images
     print(f"   👁️ Scanning {os.path.basename(file_path)} for embedded images...")
@@ -60,31 +66,46 @@ def run_visual_analysis(file_path):
     
     if not images_b64:
         print("      No extractable images found.")
-        return ""
+        return "", []
     
     print(f"      Found {len(images_b64)} images. Analyzing with qwen3-vl...")
     
-    # 2. Analyze with Vision Model
+    # 2. Analyze with Vision Model & SAVE IMAGES
     vision_llm = get_vision_model()
     
     for i, img_b64 in enumerate(images_b64):
         print(f"      🖼️ Processing Image {i+1}/{len(images_b64)}...")
         
-        # Prepare Multimodal Message
+        # A. SAVE THE IMAGE TO DISK (So Frontend can see it)
+        try:
+            # Create a safe filename
+            safe_name = os.path.basename(file_path).replace(" ", "_").replace(".", "_")
+            img_filename = f"extracted_{safe_name}_{i+1}.png"
+            img_full_path = os.path.join(ARTIFACTS_DIR, img_filename)
+            
+            # Decode and write
+            with open(img_full_path, "wb") as f:
+                f.write(base64.b64decode(img_b64))
+            
+            saved_img_paths.append(img_filename) # Keep just filename for Markdown linking
+            print(f"      💾 Saved image to: {img_filename}")
+        except Exception as e:
+            logger.error(f"      ❌ Failed to save image file: {e}")
+
+        # B. Analyze Image
         msg_content = {
             "text": "Analyze this image for a business report. Describe charts, trends, or key details visible.",
             "image_base64": img_b64
         }
         
         try:
-            # Wrap dictionary in a list to satisfy HumanMessage validation
             response = vision_llm.invoke([HumanMessage(content=[msg_content])])
             desc = response.content
             visual_report += f"\n**Visual Exhibit {i+1} Analysis:**\n{desc}\n"
         except Exception as e:
             logger.error(f"      ❌ Failed to analyze image {i+1}: {e}")
             
-    return visual_report
+    return visual_report, saved_img_paths
 
 def main(file_path):
     print(f"\n🎬 [Pipeline] Starting: {file_path}")
@@ -106,10 +127,9 @@ def main(file_path):
         df = DataSanitizer.clean_file(file_path)
 
     # ---------------------------------------------------------
-    # 1.5 VISUAL ANALYSIS (The New Feature)
+    # 1.5 VISUAL ANALYSIS
     # ---------------------------------------------------------
-    # Run this regardless of whether tabular data was found
-    visual_analysis_text = run_visual_analysis(file_path)
+    visual_analysis_text, extracted_images = run_visual_analysis(file_path)
 
     # ---------------------------------------------------------
     # PROCESS VALID DATA
@@ -131,7 +151,8 @@ def main(file_path):
         summary = run_summary_agent(insights)
             
         print("\n--- PHASE 5: VISUALIZATION ---")
-        charts = generate_smart_charts(df, IMAGES_DIR)
+        # 🟢 NOW SAVES TO ROOT ARTIFACTS DIR
+        charts = generate_smart_charts(df, ARTIFACTS_DIR)
         print(f"   ✅ Generated {len(charts)} charts.")
         
         full_context = f"""
@@ -148,7 +169,7 @@ def main(file_path):
         Attached {len(charts)} charts.
         """
 
-    # PATH B: Text Documents (PDF/Docx with Text)
+    # PATH B: Text Documents
     elif raw_text and len(raw_text) > 50:
         print("\nℹ️ No structured data found. Switching to Text Mode.")
         summary = run_summary_agent(raw_text[:5000])
@@ -163,7 +184,7 @@ def main(file_path):
         {raw_text[:15000]}
         """
         
-    # PATH C: Image-Only Documents (Scanned PDFs / Charts) - 🟢 NEW
+    # PATH C: Image-Only Documents
     elif visual_analysis_text:
         print("\nℹ️ No Text/Tables found, but Visual Analysis is available. Generating Image-Based Report.")
         summary = run_summary_agent(visual_analysis_text)
@@ -175,8 +196,7 @@ def main(file_path):
         {visual_analysis_text}
         
         NOTE:
-        This report is based solely on the visual analysis of images found in the document, 
-        as no extractable text or tabular data was detected.
+        This report is based solely on the visual analysis of images found in the document.
         """
         
     else:
@@ -189,9 +209,15 @@ def main(file_path):
     print("\n--- PHASE 6: FINAL REPORT ---")
     report = writer_agent(full_context, "Strategic Report")
     
-    # Append Visuals
+    # 🟢 APPEND VISUALS TO REPORT
+    if extracted_images:
+        report += "\n\n## Visual Evidence\n" 
+        report += "\n".join([f"![Extracted Image]({img})" for img in extracted_images])
+
     if charts:
-        report += "\n## Generated Analytics\n" + "\n".join([f"![{n}]({os.path.relpath(p, ARTIFACTS_DIR).replace(os.sep, '/')})" for n,p in charts])
+        report += "\n\n## Generated Analytics\n" 
+        # 🟢 Link directly to filename (works because folders are flat now)
+        report += "\n".join([f"![Generated Chart]({os.path.basename(p)})" for n,p in charts])
 
     # Save Markdown
     out_name = f"{os.path.basename(file_path)}_report.md"
@@ -203,7 +229,18 @@ def main(file_path):
     print("\n--- PHASE 7: PDF CONVERSION ---")
     try:
         from src.utils.pdf_utils import convert_markdown_to_pdf_brochure
-        convert_markdown_to_pdf_brochure(report, out_path.replace(".md", ".pdf"), IMAGES_DIR, title=os.path.basename(file_path), chart_list=charts)
+        
+        # Combine chart paths for PDF generation logic
+        # Note: We now point to ARTIFACTS_DIR for everything
+        all_images = charts + [(f"Extracted {i}", os.path.join(ARTIFACTS_DIR, p)) for i, p in enumerate(extracted_images)]
+        
+        convert_markdown_to_pdf_brochure(
+            report, 
+            out_path.replace(".md", ".pdf"), 
+            ARTIFACTS_DIR, # 🟢 Source images from the main artifacts folder
+            title=os.path.basename(file_path), 
+            chart_list=all_images
+        )
         print(f"✅ PDF Created: {out_path.replace('.md', '.pdf')}")
     except Exception as e:
         print(f"⚠️ PDF Generation Failed: {e}")
