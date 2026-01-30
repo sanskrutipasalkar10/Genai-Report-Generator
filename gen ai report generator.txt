@@ -1,0 +1,2062 @@
+gen ai report generator/
+├── .git/
+├── .gitignore
+├── .venv/
+├── core/
+├── docker-compose.yaml
+├── Dockerfile/
+├── genai-report-generator/
+│   ├── pyproject.toml
+│   ├── README.md
+│   ├── run_backend.py
+│   ├── config/
+│   │   ├── secrets.yaml
+│   │   └── settings.yaml
+│   ├── data/
+│   │   ├── artifacts/
+│   │   │   ├── bom_data.csv_report.md
+│   │   │   ├── complex_energy_report.docx_report.md
+│   │   │   ├── complex_energy_report.pdf_report.md
+│   │   │   ├── Complex_Tata_Sales_Test.xlsx_report.md
+│   │   │   ├── Financial Sample.xlsx_report.md
+│   │   │   ├── image_sample.pdf_report.md
+│   │   │   ├── messy_sales_data.csv_report.md
+│   │   │   ├── Q4-FY22-seg.xlsx_report.md
+│   │   │   ├── sample_test.pdf_report.md
+│   │   │   ├── sample_test.xlsx_report.md
+│   │   │   ├── stock_levels.pdf_report.md
+│   │   │   ├── stocks updated.csv_report.md
+│   │   │   ├── test_broken_inventory.pdf_report.md
+│   │   │   ├── test_messy.docx_report.md
+│   │   │   └── images/
+│   │   ├── chroma_db/
+│   │   │   ├── chroma.sqlite3
+│   │   │   └── 15c7341a-325d-40bf-9f6d-619cd60cda1e/
+│   │   ├── processed/
+│   │   └── raw/
+│   │       ├── bom_data.csv
+│   │       ├── messy_sales_data.csv
+│   │       ├── stocks updated.csv
+│   │       └── Tata_Motors_Sales_2024.csv
+│   ├── docs/
+│   │   └── diagrams/
+│   ├── infra/
+│   │   ├── helm/
+│   │   └── terraform/
+│   ├── notebooks/
+│   ├── scripts/
+│   │   ├── create_complex_excel.py
+│   │   ├── create_test_pdf.py
+│   │   ├── generate_complex_docx.py
+│   │   ├── generate_full_report.py
+│   │   ├── generate_messy_csv.py
+│   │   ├── generate_messy_docx.py
+│   │   ├── generate_test_pdf.py
+│   │   ├── test_ingest.py
+│   │   ├── test_sanitizer.py
+│   │   └── __pycache__/
+│   ├── src/
+│   │   ├── __init__.py
+│   │   ├── app_api.py
+│   │   ├── __pycache__/
+│   │   ├── app/
+│   │   │   ├── __init__.py
+│   │   │   ├── main.py
+│   │   │   ├── api/
+│   │   │   │   ├── __init__.py
+│   │   │   │   └── v1/
+│   │   │   │       └── ...
+│   │   │   ├── core/
+│   │   │   │   ├── __init__.py
+│   │   │   │   └── logger.py
+│   │   │   └── schemas/
+│   │   │       └── __init__.py
+│   │   ├── engine/
+│   │   │   ├── __init__.py
+│   │   │   ├── llm.py
+│   │   │   ├── __pycache__/
+│   │   │   ├── agents/
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── analyst.py
+│   │   │   │   ├── inspector.py
+│   │   │   │   ├── writer.py
+│   │   │   │   └── __pycache__/
+│   │   │   ├── data/
+│   │   │   │   └── artifacts/
+│   │   │   ├── prompts/
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── analyst_financial.yaml
+│   │   │   │   ├── analyst_operational.yaml
+│   │   │   │   └── writer.yaml
+│   │   │   └── tools/
+│   │   │       ├── __init__.py
+│   │   │       └── ...
+│   │   ├── rag/
+│   │   │   ├── __init__.py
+│   │   │   ├── embeddings.py
+│   │   │   ├── file_loader.py
+│   │   │   ├── ingestion.py
+│   │   │   ├── vector_store.py
+│   │   │   ├── __pycache__/
+│   │   │   └── parsers/
+│   │   │       └── ...
+│   │   └── utils/
+│   │       ├── data_sanitizer.py
+│   │       ├── data_utils.py
+│   │       ├── image_extractor.py
+│   │       ├── pdf_utils.py
+│   │       ├── viz_utils.py
+│   │       └── __pycache__/
+│   └── tests/
+│       ├── evaluation/
+│       │   └── __init__.py
+│       ├── integration/
+│       │   └── __init__.py
+│       └── unit/
+│           └── __init__.py
+├── README.md
+├── requirements.txt
+├── setup_project.py
+├── src/
+└── tests/
+
+
+
+
+settings.yml
+llm:
+  # 🟢 CHANGE: Use the specific Cloud Model ID
+  reasoning_model: "qwen3-coder:480b-cloud"
+  
+  # 🟢 CHANGE: Point to your Cloud Provider's API URL (Example below)
+  base_url: "https://api.deepseek.com/v1"  # Replace with actual Qwen/Cloud URL
+  api_key: "sk-YOUR_API_KEY_HERE"          # 🟢 REQUIRED for Cloud
+  
+  # Temperature 0.0 is crucial for Coding tasks
+  temperature: 0.0
+
+embeddings:
+  model_name: "nomic-embed-text"
+  base_url: "http://localhost:11434" # Embeddings can stay local if you want
+
+rag:
+  chunk_size: 500
+  chunk_overlap: 100
+  vector_db_path: "data/chroma_db"
+  collection_name: "sales_data"
+
+
+generate_full_report.py
+import sys
+import os
+import argparse
+import pandas as pd
+import json
+import logging
+from langchain_core.messages import HumanMessage
+
+# --- SETUP & LOGGING ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+sys.path.append(project_root)
+
+ARTIFACTS_DIR = os.path.join(project_root, "data", "artifacts")
+IMAGES_DIR = os.path.join(ARTIFACTS_DIR, "images")
+os.makedirs(IMAGES_DIR, exist_ok=True)
+
+# --- IMPORT MODULES ---
+from src.utils.data_sanitizer import DataSanitizer
+from src.engine.agents.inspector import InspectorAgent
+from src.engine.agents.analyst import AnalystAgent
+from src.engine.agents.writer import writer_agent
+from src.utils.viz_utils import generate_smart_charts
+from src.rag.file_loader import load_file
+from src.engine.llm import get_llm, get_vision_model 
+from src.utils.image_extractor import extract_images_from_file 
+
+def run_summary_agent(insights):
+    """
+    Synthesizes the raw analysis into an Executive Summary.
+    """
+    print("\n🧠 [Summary Agent] Synthesizing insights...")
+    llm = get_llm()
+    prompt = f"""
+    You are an Executive Analyst. Write a high-level **Executive Summary** (max 200 words).
+    
+    DATA INSIGHTS:
+    {insights}
+    
+    FOCUS:
+    - Highlight key numbers (Revenue, Totals).
+    - Identify top trends or anomalies.
+    - Be concise and professional.
+    """
+    return llm.invoke(prompt).content
+
+def run_visual_analysis(file_path):
+    """
+    Extracts images and uses Vision Model to describe them.
+    """
+    print("\n--- PHASE 1.5: VISUAL ANALYSIS (Vision Model) ---")
+    visual_report = ""
+    
+    # 1. Extract Images
+    print(f"   👁️ Scanning {os.path.basename(file_path)} for embedded images...")
+    images_b64 = extract_images_from_file(file_path)
+    
+    if not images_b64:
+        print("      No extractable images found.")
+        return ""
+    
+    print(f"      Found {len(images_b64)} images. Analyzing with qwen3-vl...")
+    
+    # 2. Analyze with Vision Model
+    vision_llm = get_vision_model()
+    
+    for i, img_b64 in enumerate(images_b64):
+        print(f"      🖼️ Processing Image {i+1}/{len(images_b64)}...")
+        
+        # Prepare Multimodal Message
+        msg_content = {
+            "text": "Analyze this image for a business report. Describe charts, trends, or key details visible.",
+            "image_base64": img_b64
+        }
+        
+        try:
+            # Wrap dictionary in a list to satisfy HumanMessage validation
+            response = vision_llm.invoke([HumanMessage(content=[msg_content])])
+            desc = response.content
+            visual_report += f"\n**Visual Exhibit {i+1} Analysis:**\n{desc}\n"
+        except Exception as e:
+            logger.error(f"      ❌ Failed to analyze image {i+1}: {e}")
+            
+    return visual_report
+
+def main(file_path):
+    print(f"\n🎬 [Pipeline] Starting: {file_path}")
+    
+    # ---------------------------------------------------------
+    # 1. INGEST & SANITIZE 
+    # ---------------------------------------------------------
+    print("\n--- PHASE 1: SANITIZATION (Python) ---")
+    raw_text, tables, _ = load_file(file_path)
+    df = pd.DataFrame()
+    
+    if tables:
+        print("   🚿 Sanitizing Extracted Tables...")
+        raw_df = tables[0] if isinstance(tables, list) else list(tables.values())[0]
+        df = DataSanitizer.clean_dataframe(raw_df)
+        
+    if df.empty:
+        print("   🚿 Running Strict File Sanitization...")
+        df = DataSanitizer.clean_file(file_path)
+
+    # ---------------------------------------------------------
+    # 1.5 VISUAL ANALYSIS (The New Feature)
+    # ---------------------------------------------------------
+    # Run this regardless of whether tabular data was found
+    visual_analysis_text = run_visual_analysis(file_path)
+
+    # ---------------------------------------------------------
+    # PROCESS VALID DATA
+    # ---------------------------------------------------------
+    full_context = ""
+    charts = []
+
+    # PATH A: Structured Data (Excel/CSV/Table)
+    if not df.empty:
+        print("\n--- PHASE 2: INSPECTION (LLM) ---")
+        inspector = InspectorAgent()
+        plan = inspector.inspect_and_plan(df)
+        
+        print("\n--- PHASE 3: ANALYSIS (Code) ---")
+        analyst = AnalystAgent()
+        insights, _ = analyst.perform_analysis(df, plan)
+        
+        print("\n--- PHASE 4: SUMMARIZATION ---")
+        summary = run_summary_agent(insights)
+            
+        print("\n--- PHASE 5: VISUALIZATION ---")
+        charts = generate_smart_charts(df, IMAGES_DIR)
+        print(f"   ✅ Generated {len(charts)} charts.")
+        
+        full_context = f"""
+        EXECUTIVE SUMMARY:
+        {summary}
+        
+        DETAILED FINDINGS:
+        {insights}
+        
+        VISUAL ANALYSIS (FROM EMBEDDED IMAGES):
+        {visual_analysis_text}
+        
+        GENERATED CHARTS:
+        Attached {len(charts)} charts.
+        """
+
+    # PATH B: Text Documents (PDF/Docx with Text)
+    elif raw_text and len(raw_text) > 50:
+        print("\nℹ️ No structured data found. Switching to Text Mode.")
+        summary = run_summary_agent(raw_text[:5000])
+        full_context = f"""
+        EXECUTIVE SUMMARY:
+        {summary}
+        
+        VISUAL ANALYSIS (FROM EMBEDDED IMAGES):
+        {visual_analysis_text}
+        
+        DOCUMENT CONTENT:
+        {raw_text[:15000]}
+        """
+        
+    # PATH C: Image-Only Documents (Scanned PDFs / Charts) - 🟢 NEW
+    elif visual_analysis_text:
+        print("\nℹ️ No Text/Tables found, but Visual Analysis is available. Generating Image-Based Report.")
+        summary = run_summary_agent(visual_analysis_text)
+        full_context = f"""
+        EXECUTIVE SUMMARY:
+        {summary}
+        
+        VISUAL ANALYSIS (FROM EMBEDDED IMAGES):
+        {visual_analysis_text}
+        
+        NOTE:
+        This report is based solely on the visual analysis of images found in the document, 
+        as no extractable text or tabular data was detected.
+        """
+        
+    else:
+        print("❌ Error: File contains no readable text, tables, or images.")
+        return
+
+    # ---------------------------------------------------------
+    # 6. REPORT GENERATION
+    # ---------------------------------------------------------
+    print("\n--- PHASE 6: FINAL REPORT ---")
+    report = writer_agent(full_context, "Strategic Report")
+    
+    # Append Visuals
+    if charts:
+        report += "\n## Generated Analytics\n" + "\n".join([f"![{n}]({os.path.relpath(p, ARTIFACTS_DIR).replace(os.sep, '/')})" for n,p in charts])
+
+    # Save Markdown
+    out_name = f"{os.path.basename(file_path)}_report.md"
+    out_path = os.path.join(ARTIFACTS_DIR, out_name)
+    with open(out_path, "w", encoding="utf-8") as f: f.write(report)
+    print(f"✅ Report Saved: {out_path}")
+
+    # Generate PDF
+    print("\n--- PHASE 7: PDF CONVERSION ---")
+    try:
+        from src.utils.pdf_utils import convert_markdown_to_pdf_brochure
+        convert_markdown_to_pdf_brochure(report, out_path.replace(".md", ".pdf"), IMAGES_DIR, title=os.path.basename(file_path), chart_list=charts)
+        print(f"✅ PDF Created: {out_path.replace('.md', '.pdf')}")
+    except Exception as e:
+        print(f"⚠️ PDF Generation Failed: {e}")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("file_path")
+    args = parser.parse_args()
+    os.environ["DEBUG_MODE"] = "True"
+    main(args.file_path)
+
+logger.py
+import logging
+import sys
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger("genai-app")
+
+
+main.py from fastapi import FastAPI
+from src.app.core.logger import logger
+
+app = FastAPI(title="GenAI Report Generator API")
+
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Application is starting...")
+
+@app.get("/health")
+def health_check():
+    return {"status": "active", "module": "genai-reporter"}
+
+
+analyst.py
+
+import pandas as pd
+import sys
+import os
+
+# Add project root to path to ensure imports work
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
+
+from src.engine.llm import get_llm
+from src.engine.tools.code_executor import execute_python_code
+
+class AnalystAgent:
+    def __init__(self):
+        self.llm = get_llm()
+        self.debug_mode = os.getenv("DEBUG_MODE", "True").lower() == "true"
+
+    def perform_analysis(self, df: pd.DataFrame, plan: dict):
+        """
+        Executes the analysis plan by generating and running Python code.
+        Args:
+            df (pd.DataFrame): The clean data.
+            plan (dict): The strategy from the Inspector Agent.
+        """
+        print(f"\n👨‍💻 [Analyst] Generating Code Strategy...")
+
+        # 1. Construct the Prompt
+        # We give the LLM the columns and the explicit plan to follow.
+        columns = list(df.columns)
+        
+        prompt = f"""
+        You are a Senior Python Data Analyst.
+        
+        ### DATA CONTEXT
+        - **Variable Name:** `df`
+        - **Columns:** {columns}
+        - **Sample Data (First 2 rows):**
+        {df.head(2).to_dict(orient='records')}
+
+        ### ANALYSIS PLAN (From Inspector)
+        {plan}
+
+        ### YOUR TASK
+        Write a Python script to execute this analysis.
+        1. **Group By** the dimensions listed in the plan.
+        2. **Aggregate** (Sum/Mean) the metrics listed.
+        3. **PRINT** the results clearly using `print()`.
+        
+        ### CRITICAL RULES
+        - **DO NOT** load the data. `df` is already defined in the environment.
+        - **DO NOT** use `plt.show()`. Only print text/tables.
+        - Wrap your code in ```python``` blocks.
+        ### ⚠️ CRITICAL LOGIC RULES (DO NOT IGNORE):
+            1. **DO NOT SUM COLUMNS BLINDLY:** Financial data often mixes Revenue (positive) and Expenses (negative) in the same column. 
+               - If asked for **Revenue**, filter rows: `df[df['Metric'].str.contains('Revenue', case=False)]`.
+               - If asked for **Expenses**, filter rows: `df[df['Metric'].str.contains('Expense|Cost', case=False)]`.
+               - **NEVER** run `df['Column'].sum()` on a P&L statement unless calculating Net Profit.
+
+            2. **HANDLING NEGATIVES:** - Expenses might be negative. When comparing "Magnitude" or plotting, use `.abs()`.
+            
+            3. **IGNORE TOTAL ROWS:** - If the data contains rows like "Total", "Consolidated", or "EBITDA", do not sum them with the individual line items, or you will double-count.
+        
+
+
+        ### FINANCIAL LOGIC RULES:
+            1. **REVENUE vs EXPENSE:** Never sum a whole column if it contains both Revenue (Positive) and Expenses (Negative). You will get Net Profit, not Total Revenue.
+            2. **FILTERING:** To get "Total Revenue", you must filter the dataframe:
+               `revenue = df[df['Metric'].str.contains('Revenue', case=False)]['JLR'].sum()`
+            3. **ABSOLUTE VALUES:** When plotting "Top Costs", convert negative expense numbers to positive values using `.abs()` so they show up on charts.
+            
+        """
+        
+
+        # 2. DEBUG: Print "Thinking" (Input Prompt)
+        if self.debug_mode:
+            print("\n🧠 [ANALYST THOUGHTS - INPUT PROMPT]")
+            print("-" * 40)
+            print(prompt)
+            print("-" * 40)
+
+        # 3. Invoke LLM (Retry Loop)
+        for attempt in range(2):
+            response = self.llm.invoke(prompt)
+            code_text = response.content
+            
+            # 4. DEBUG: Print Raw Output
+            if self.debug_mode:
+                print(f"\n🤖 [ANALYST GENERATED CODE - ATTEMPT {attempt+1}]")
+                print("-" * 40)
+                print(code_text)
+                print("-" * 40)
+
+            # 5. Execute Code
+            # execute_python_code handles the cleaning of ```python tags
+            output_log, _ = execute_python_code(code_text, df)
+
+            # 6. Validate Output
+            if "Error" not in output_log and len(output_log.strip()) > 10:
+                print(f"   ✅ Code executed successfully.")
+                if self.debug_mode:
+                    print(f"   📄 Output Log:\n{output_log[:500]}...\n")
+                return output_log, code_text
+            
+            else:
+                print(f"   ⚠️ Code Attempt {attempt+1} Failed/Empty. Reason: {output_log[:100]}...")
+                # Optional: You could modify the prompt here to include the error message for the next attempt
+
+        return "Analysis Failed: Code execution returned errors.", ""
+
+
+inspector.py
+import json
+import re
+import logging
+import pandas as pd
+from src.engine.llm import get_llm
+from langchain_core.messages import HumanMessage
+
+logger = logging.getLogger(__name__)
+
+class InspectorAgent:
+    def __init__(self):
+        self.llm = get_llm()
+
+    def inspect_and_plan(self, df: pd.DataFrame) -> dict:
+        """
+        Analyzes a CLEANED DataFrame and generates a comprehensive execution plan.
+        """
+        print(f"--- 🕵️ Inspector Agent: Analyzing Schema ({len(df)} rows, {len(df.columns)} cols) ---")
+        
+        # 1. Identify Column Types for Context
+        # We pre-calculate this to give the LLM a head start
+        date_cols = [col for col in df.columns if 'date' in col.lower() or 'time' in col.lower() or 'year' in col.lower()]
+        cat_cols = list(df.select_dtypes(include=['object', 'category']).columns)
+        num_cols = list(df.select_dtypes(include=['number']).columns)
+
+        # 2. Prepare Context for LLM
+        schema_info = {
+            "columns": list(df.columns),
+            "primary_id": df.columns[0], # Usually the first column is the ID/Key
+            "date_columns": date_cols,
+            "categorical_columns": cat_cols,
+            "numeric_columns": num_cols,
+            "sample_data": df.head(3).to_dict(orient='records')
+        }
+        
+        # 3. Comprehensive Prompt
+        # Forces the LLM to look for Trends, Rankings, and Primary Key analysis.
+        prompt = f"""
+        You are a Senior Data Architect. Analyze this CLEANED dataset structure and generate a COMPREHENSIVE Analysis Plan.
+
+        ### DATA CONTEXT
+        - **Primary Key/ID:** '{schema_info['primary_id']}'
+        - **Numeric Metrics:** {schema_info['numeric_columns']}
+        - **Categorical Dimensions:** {schema_info['categorical_columns']}
+        - **Time Dimensions:** {schema_info['date_columns']}
+        - **Sample Data:** {json.dumps(schema_info['sample_data'], indent=2, default=str)}
+
+        ### TASK
+        Generate a JSON object containing a detailed analysis strategy.
+        Do NOT limit yourself to 3 questions. Generate as many relevant questions as the data supports (up to 8).
+
+        ### STRATEGY GUIDELINES:
+        1. **Primary Entity Analysis:** Always start by analyzing the Primary Key (e.g., "Total Quantity by {schema_info['primary_id']}").
+        2. **Dimensional Breakdowns:** For every major categorical column (Region, Shift, Station, Dept), ask for a breakdown of the key metrics.
+        3. **Time Series (If Applicable):** If 'Time Dimensions' exist, MUST ask for "Trend of [Metric] over Time/Month/Year".
+        4. **Distribution/Rankings:** Ask for "Top 5" and "Bottom 5" performers.
+        5. **Financial Logic:** If dataset is FINANCIAL, identify Income vs Expense rows.
+
+        ### OUTPUT FORMAT (Strict JSON)
+        Return ONLY valid JSON. No markdown.
+        {{
+            "dataset_type": "TRANSACTIONAL" | "FINANCIAL_STATEMENT" | "INVENTORY",
+            "primary_dimensions": ["list", "of", "cols"],
+            "primary_metrics": ["list", "of", "cols"],
+            "analysis_questions": [
+                "1. Calculate Total [Metric] by {schema_info['primary_id']} (Primary Breakdown)",
+                "2. Analyze [Metric] distribution across [Category Column]",
+                "3. Trend of [Metric] over [Date Column]",
+                "4. Identify Top 10 {schema_info['primary_id']} by [Metric]"
+            ]
+        }}
+        """
+
+        # 4. Invoke LLM
+        try:
+            messages = [HumanMessage(content=prompt)]
+            response = self.llm.invoke(messages)
+            content = response.content.strip()
+
+            # 5. Parse JSON with Retry Logic
+            # Extract JSON from potential markdown blocks ```json ... ```
+            json_match = re.search(r"\{.*\}", content, re.DOTALL)
+            if json_match:
+                plan = json.loads(json_match.group(0))
+                
+                # Sanity Check: Ensure 'analysis_questions' is a list
+                if not isinstance(plan.get('analysis_questions'), list):
+                    # Try to fix it if it's a string
+                    if isinstance(plan.get('analysis_questions'), str):
+                        plan['analysis_questions'] = [plan['analysis_questions']]
+                    else:
+                        raise ValueError("LLM returned malformed questions list")
+
+                print(f"   ✅ Plan Generated: {plan.get('dataset_type', 'Unknown')} with {len(plan['analysis_questions'])} distinct analyses.")
+                return plan
+            else:
+                raise ValueError("No JSON block found")
+
+        except Exception as e:
+            logger.error(f"Inspector Parse Error: {e}. Falling back to default plan.")
+            return self._get_fallback_plan(df)
+
+    def _get_fallback_plan(self, df):
+        """
+        If LLM fails, generate a simple plan based on column types.
+        """
+        numerics = list(df.select_dtypes(include=['number']).columns)
+        objects = list(df.select_dtypes(include=['object', 'string']).columns)
+        
+        return {
+            "dataset_type": "GENERIC",
+            "primary_dimensions": objects[:2], # Take first 2 text cols
+            "primary_metrics": numerics[:2],   # Take first 2 number cols
+            "analysis_questions": [
+                f"Calculate Sum of {numerics[0]} by {objects[0]}" if numerics and objects else "Count rows"
+            ]
+        }
+
+
+writer.py import yaml
+import os
+from pathlib import Path
+from langchain_core.messages import SystemMessage, HumanMessage
+from src.engine.llm import get_llm
+
+# Define the directory where prompts are stored
+PROMPT_PATH = Path(__file__).parent.parent / "prompts/writer.yaml"
+
+def load_prompt_config():
+    """Safe loader for YAML config with fallback."""
+    if PROMPT_PATH.exists():
+        with open(PROMPT_PATH, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+    return {}
+
+def writer_agent(context_data: str, report_type: str = "Strategic Report") -> str:
+    """
+    Synthesizes text content, data analysis, and charts into a final Markdown report.
+    
+    Args:
+        context_data (str): The full string containing Summary, Details, and Visuals.
+        report_type (str): The title/style of the report.
+    """
+    print(f"--- ✍️  Writer Agent: Drafting '{report_type}' ---")
+    
+    # 1. Load Configuration
+    config = load_prompt_config()
+    
+    # 2. Define System Prompt (With Currency Guards)
+    # We explicitly inject the currency rule here to override any LLM defaults
+    base_instruction = config.get('instruction', f"""
+    You are a Senior Business Analyst writing a {report_type}.
+    Structure the report with clear headings, bullet points, and professional tone.
+    """)
+
+    currency_guard = """
+    CRITICAL FORMATTING RULES:
+    1. **NO CURRENCY ASSUMPTIONS**: Do NOT add '$', '€', '£', or 'USD' symbols to numbers unless they explicitly appear in the input text.
+    2. **RESPECT SOURCE UNITS**: If the input says "Rs", "Cr", or "Lakhs", use those exact terms. If no unit is given, simply use the number (e.g., "48,023").
+    3. **PRESERVE ACCURACY**: Do not round numbers heavily (e.g., keep 48,023, don't change to 48k unless asked).
+    """
+
+    system_prompt = f"{base_instruction}\n\n{currency_guard}"
+
+    # 3. Construct the User Input
+    # We pass the consolidated context from the pipeline
+    user_content = f"""
+    REPORT TITLE: {report_type}
+    
+    INPUT DATA & ANALYSIS:
+    {context_data}
+    
+    TASK:
+    Write a cohesive report in Markdown format. 
+    - Start with a Title (#).
+    - Include an Executive Summary.
+    - Create a 'Key Insights' section.
+    - Create a 'Recommendations' section.
+    - Embed the image links provided in the 'Visual Evidence' section exactly as they are.
+    """
+    
+    # 4. Initialize LLM
+    # We remove 'model_type="reasoning"' to ensure compatibility with your get_llm() wrapper
+    llm = get_llm() 
+    
+    # 5. Construct Messages
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_content)
+    ]
+    
+    # 6. Generate Report
+    try:
+        response = llm.invoke(messages)
+        content = response.content
+        print("--- ✅ Report Generated ---")
+        return content
+    except Exception as e:
+        print(f"❌ Writer Error: {e}")
+        return f"# Error Generating Report\n\nSystem encountered an error: {e}\n\n## Raw Data\n{context_data}"
+
+
+
+analyst_financial.yaml
+role: "Senior Financial Quant"
+instruction: |
+  You are an expert Python Developer for Financial Data Analysis.
+  
+  ### DATA CONTEXT
+  - You have a dictionary of DataFrames: `dfs`.
+  - The data is likely "Row-Based" (Metrics in the first column, Values in subsequent columns).
+
+  ### 🟢 GENERALIZED TERMINOLOGY (Look for ANY of these case-insensitive matches)
+  1. **REVENUE**: "Revenue", "Total Revenue", "Sales", "Net Sales", "Turnover", "Top Line".
+  2. **PROFIT (EBITDA)**: "EBITDA", "Operating Profit", "OIBDA", "Profit from Operations".
+  3. **NET PROFIT**: "Net Profit", "Net Income", "PAT", "Profit After Tax", "Bottom Line".
+
+  ### ⛔ RESTRICTIONS (CRITICAL)
+  1. **NO RAW DUMPS:** NEVER print a whole DataFrame or large chunk of rows.
+  2. **NO FUNCTIONS:** Do NOT define helper functions (e.g., `def find_value():`). Write a single, linear top-to-bottom script.
+     *Reason: Functions cannot access variables in this execution environment.*
+  3. **SINGLE VALUES:** Only print specific calculated values (e.g., "Revenue: 500 Cr") or small summaries.
+  4. **SCOPE:** Define all variables at the top level.
+
+  ### YOUR MISSION
+  Write a robust Python script to analyze the data.
+
+  ### EXECUTION STEPS
+  1. **Find Data:** Iterate `dfs.values()` to find the best sheet.
+  2. **Normalize:** Rename col 0 to 'Metric'.
+  3. **Extract:** Use `df.loc[df['Metric'].str.contains(pattern, na=False)]` directly for each metric (Revenue, EBITDA, PAT).
+  4. **Calculate:** Margins % = (Profit / Revenue) * 100.
+  5. **Output:** Print the final summary clearly.
+
+analyst_operational.yaml
+role: "Operational Data Scientist"
+instruction: |
+  You are an expert Python Developer for Operational Data.
+
+  ### DATA CONTEXT
+  - You have a dictionary of DataFrames: `dfs`.
+  - The data is likely "Column-Based" (Headers in the first row).
+
+  ### 🟢 GENERALIZED TERMINOLOGY
+  1. **VOLUME**: "Qty", "Quantity", "Units", "Volume", "Count", "Pieces".
+  2. **VALUE**: "Amount", "Value", "Total Price", "Cost", "Revenue", "Sales".
+  3. **CATEGORIES**: "Region", "Zone", "City", "Category", "SKU", "Product", "Channel", "Source".
+
+  ### ⛔ RESTRICTIONS (CRITICAL)
+  1. **NO RAW DUMPS:** NEVER print a whole DataFrame or a whole Column. It will crash the system.
+  2. **NO FUNCTIONS:** Do NOT define helper functions. Write a single, linear script.
+     *Reason: Functions cannot access variables in this execution environment.*
+  3. **SUMMARIZE ONLY:** - Use `.sum()` for numbers.
+     - Use `.value_counts().head(5)` for categorical columns.
+     - Use `.describe()` for statistics.
+
+  ### YOUR MISSION
+  1. **Identify Main Sheet:** Find the largest dataframe in `dfs`.
+  2. **Identify Columns:** Find columns matching the terminology above.
+  3. **Aggregation:**
+     - Sum the 'Volume' and 'Value' columns.
+     - Group by 'Category' (if found) and show top 5 performers.
+  4. **Output:** Print the summary.
+
+writer.yaml
+role: "Executive Report Writer"
+instruction: |
+  You are a top-tier Business Consultant. 
+  
+  INPUTS:
+  1. DOCUMENT CONTEXT (Raw text or filename)
+  2. ANALYST FINDINGS (Calculated numbers)
+  
+  CRITICAL RULES:
+  - If 'ANALYST FINDINGS' is empty, "Series([], ...)", or error, YOU MUST STATE: "Data analysis could not be performed due to data format issues."
+  - DO NOT HALLUCINATE NUMBERS. If you don't see a number in the input, do not write one.
+  - Use the provided numbers to write a professional summary.
+  
+  STRUCTURE:
+  # Executive Summary
+  (Overview)
+  
+  ## Key Data Insights
+  (Discuss the calculated metrics provided in the findings.)
+  
+  ## Recommendations
+  (Actionable business advice based on the insights.)
+
+code_executor.py
+import pandas as pd
+import numpy as np
+import sys
+import re
+from io import StringIO
+import contextlib
+
+class DataTools:
+    """
+    A Generalizable Toolbox for the LLM. 
+    Handles complex Pandas syntax and Sheet Selection logic.
+    """
+    def get_active_sheet(self, dfs):
+        if not dfs or not isinstance(dfs, dict):
+            return pd.DataFrame()
+        for key in dfs.keys():
+            key_str = str(key).lower()
+            if "fy" in key_str or "year" in key_str or "summary" in key_str:
+                return dfs[key]
+        try:
+            return list(dfs.values())[0]
+        except IndexError:
+            return pd.DataFrame()
+
+    def get_value(self, df, row_label, col_label):
+        try:
+            if df.empty: return 0.0
+            search_col = df.columns[0]
+            mask = df[search_col].astype(str).str.contains(row_label, case=False, na=False)
+            row = df[mask]
+            if not row.empty:
+                val = row[col_label].values[0]
+                return pd.to_numeric(val, errors='coerce')
+            return 0.0
+        except Exception:
+            return 0.0
+
+    def get_column_sum(self, df, col_label):
+        try:
+            if col_label in df.columns:
+                return pd.to_numeric(df[col_label], errors='coerce').sum()
+            return 0.0
+        except Exception:
+            return 0.0
+
+def execute_python_code(code: str, data: pd.DataFrame):
+    """
+    Executes Python code generated by the LLM in a controlled environment.
+    Returns: tuple(output_string, modified_dataframe)
+    """
+    output_buffer = StringIO()
+    
+    code_match = re.search(r"```(?:\w+)?\n(.*?)```", code, re.DOTALL)
+    clean_code = code_match.group(1).strip() if code_match else code.replace("```", "").strip()
+
+    tools = DataTools()
+    
+    # Work on a COPY of the data so we don't corrupt the original if code fails
+    working_df = data.copy() if isinstance(data, pd.DataFrame) else pd.DataFrame()
+
+    execution_env = {
+        "pd": pd,
+        "np": np,
+        "dfs": data,       # Legacy support
+        "df": working_df,  # 🟢 The Primary Object the AI will modify
+        "tools": tools,
+        "print": print,
+        "len": len,
+        "str": str,
+        "int": int,
+        "float": float,
+        "list": list,
+        "dict": dict,
+        "range": range
+    }
+    
+    try:
+        with contextlib.redirect_stdout(output_buffer):
+            exec(clean_code, execution_env, execution_env)
+        
+        result_text = output_buffer.getvalue()
+        if not result_text:
+            result_text = "Code executed successfully (No Output printed)."
+        
+        # 🟢 Extract the potentially modified DataFrame
+        cleaned_df = execution_env.get('df', working_df)
+
+        return result_text.strip(), cleaned_df
+        
+    except Exception as e:
+        return f"Error executing code: {str(e)}", data
+
+
+
+llm.py
+import requests
+import json
+import os
+import time
+from typing import List, Optional, Any
+from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
+from langchain_core.language_models import BaseChatModel
+from langchain_core.outputs import ChatResult, ChatGeneration
+
+class OllamaRestChatModel(BaseChatModel):
+    """
+    A Custom LangChain wrapper that uses the REST API (requests) directly.
+    """
+    model_name: str
+    base_url: str = "http://localhost:11434"
+    temperature: float = 0.0
+    api_key: Optional[str] = None
+    
+    # Configuration for Large Datasets
+    timeout: int = 360      
+    num_ctx: int = 8192     
+
+    def _generate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs: Any) -> ChatResult:
+        # 1. Convert LangChain Messages to Ollama API Format
+        ollama_messages = []
+        for msg in messages:
+            role = "user"
+            content = msg.content
+            images = []
+
+            # Handle Vision (Unwrap List if needed)
+            if isinstance(content, list) and len(content) > 0 and isinstance(content[0], dict):
+                content = content[0]
+
+            # Check for Image Dict
+            if isinstance(content, dict) and "image_base64" in content:
+                text_part = content.get("text", "")
+                img_part = content.get("image_base64")
+                content = text_part
+                if img_part:
+                    images.append(img_part)
+
+            if isinstance(msg, SystemMessage):
+                role = "system"
+            elif isinstance(msg, AIMessage):
+                role = "assistant"
+            
+            msg_obj = {"role": role, "content": content}
+            if images:
+                msg_obj["images"] = images
+            
+            ollama_messages.append(msg_obj)
+
+        # 2. Prepare Payload
+        payload = {
+            "model": self.model_name,
+            "messages": ollama_messages,
+            "stream": False,
+            "options": {
+                "temperature": self.temperature,
+                "num_ctx": self.num_ctx
+            }
+        }
+
+        # 3. Define Headers
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        # 4. Execute with Retry Logic
+        # 🟢 CRITICAL FIX: Ensure this says '/api/chat'
+        endpoint = f"{self.base_url}/api/chat"
+        
+        debug_mode = os.environ.get("DEBUG_MODE", "False").lower() == "true"
+        if debug_mode:
+            # Safe print (hide base64)
+            debug_msgs = []
+            for m in ollama_messages:
+                dm = m.copy()
+                if "images" in dm: dm["images"] = ["<BASE64_IMAGE_DATA>"]
+                debug_msgs.append(dm)
+            print(f"\n🧠 [LLM INPUT]: {str(debug_msgs)[:300]}...\n")
+
+        max_retries = 3
+        backoff_seconds = 3 
+
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    print(f"⚡ Retrying Request ({attempt+1}/{max_retries})...")
+                else:
+                    # 🟢 DEBUG PRINT: This will confirm the URL in your console
+                    print(f"⚡ Sending REST Request to {self.model_name} at {endpoint}...")
+
+                response = requests.post(endpoint, json=payload, headers=headers, timeout=self.timeout)
+                response.raise_for_status() 
+                
+                result_json = response.json()
+                content = result_json.get("message", {}).get("content", "")
+                
+                if debug_mode:
+                    print(f"🤖 [LLM OUTPUT]: {content[:200]}...\n")
+                
+                generation = ChatGeneration(message=AIMessage(content=content))
+                return ChatResult(generations=[generation])
+
+            except requests.exceptions.RequestException as e:
+                print(f"   ⚠️ LLM Connection Failed (Attempt {attempt+1}): {e}")
+                
+                if attempt < max_retries - 1:
+                    print(f"   ⏳ Waiting {backoff_seconds}s before retry...")
+                    time.sleep(backoff_seconds)
+                else:
+                    print("   ❌ Max retries reached. Service Unavailable.")
+                    return ChatResult(generations=[ChatGeneration(message=AIMessage(content=f"Error: {e}"))])
+        
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content="Error: Unknown LLM Failure"))])
+
+    @property
+    def _llm_type(self) -> str:
+        return "ollama-rest-custom"
+
+# --- FACTORY FUNCTIONS ---
+
+def get_llm():
+    """Factory for Standard Reasoning/Text Analysis"""
+    MY_OLLAMA_KEY = "b3bfd14261204ff2b1d2b4f36a1ecebb.3xPoI7VU9fetGthvocHnHrVs" 
+    return OllamaRestChatModel(
+        model_name="qwen3-coder:480b-cloud",
+        base_url="http://localhost:11434",
+        api_key=MY_OLLAMA_KEY,
+        temperature=0.0,
+        timeout=360,
+        num_ctx=8192
+    )
+
+def get_vision_model():
+    """Factory for Vision Model (Image Analysis)"""
+    MY_OLLAMA_KEY = "b3bfd14261204ff2b1d2b4f36a1ecebb.3xPoI7VU9fetGthvocHnHrVs"
+    return OllamaRestChatModel(
+        model_name="qwen3-vl:235b-instruct-cloud", # Vision Model
+        base_url="http://localhost:11434",
+        api_key=MY_OLLAMA_KEY,
+        temperature=0.1, 
+        timeout=360,
+        num_ctx=4096 
+    )
+
+
+embeddings.py
+# 🟢 UPDATED: Modern Import
+from langchain_ollama import OllamaEmbeddings
+import yaml
+from pathlib import Path
+
+CONFIG_PATH = Path(__file__).parent.parent.parent / "config/settings.yaml"
+with open(CONFIG_PATH) as f:
+    config = yaml.safe_load(f)
+
+def get_embedding_model():
+    """Returns the Nomic embedding interface"""
+    return OllamaEmbeddings(
+        model=config['embeddings']['model_name'],
+        base_url=config['embeddings']['base_url']
+    )
+
+file_loader.py
+import pandas as pd
+import os
+from typing import Tuple, List, Dict, Any, Union
+
+# Try importing parsers, gracefully handle if missing
+try:
+    from src.rag.parsers.pdf_parser import parse_pdf # Renamed to match standard
+    from src.rag.parsers.docx_parser import parse_docx
+except ImportError:
+    print("⚠️ [File Loader] Parsers not found. PDF/DOCX support limited.")
+    parse_pdf = None
+    parse_docx = None
+
+def load_file(file_path: str) -> Tuple[str, Union[List[pd.DataFrame], Dict[str, pd.DataFrame]], Dict]:
+    """
+    Ingests a file and returns raw content.
+    
+    Returns:
+        raw_text (str): Extracted text (for RAG/Summarization)
+        tables (list/dict): Extracted DataFrames (raw, no headers set)
+        config (dict): Empty dict (placeholder for compatibility)
+    """
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"File not found: {file_path}")
+
+    ext = os.path.splitext(file_path)[1].lower()
+    filename = os.path.basename(file_path)
+    print(f"📂 [File Loader] Ingesting: {filename}")
+
+    raw_text = ""
+    tables = [] # Can be a List or Dict
+    config = {} # Placeholder - Inspection happens in main pipeline now
+
+    try:
+        # --- 1. EXCEL ---
+        if ext in [".xlsx", ".xls"]:
+            # Load with header=None so DataSanitizer can find the real header later
+            # Load all sheets as a Dict
+            tables = pd.read_excel(file_path, sheet_name=None, header=None)
+            
+        # --- 2. CSV ---
+        elif ext == ".csv":
+            # Load with header=None so DataSanitizer can find the real header later
+            df = pd.read_csv(file_path, header=None, engine='python')
+            tables = [df] # Return as list
+
+        # --- 3. PDF ---
+        elif ext == ".pdf":
+            if parse_pdf:
+                raw_text, tables = parse_pdf(file_path)
+            else:
+                print("❌ PDF Parser not installed.")
+
+        # --- 4. DOCX ---
+        elif ext in [".docx", ".doc"]:
+            if parse_docx:
+                raw_text, tables = parse_docx(file_path)
+            else:
+                print("❌ DOCX Parser not installed.")
+
+        else:
+            print(f"❌ Unsupported file type: {ext}")
+
+    except Exception as e:
+        print(f"❌ [File Loader] Read Error: {e}")
+        # Return empty structures on failure to prevent crashes
+        return "", [], {}
+
+    # Return raw data. 
+    # NOTE: We do NOT clean here. usage of DataSanitizer in main.py handles that.
+    return raw_text, tables, config
+
+
+ingestion.py
+import os
+from typing import List
+from langchain_community.document_loaders import PyPDFLoader, CSVLoader, UnstructuredExcelLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from src.rag.vector_store import get_vector_store
+import yaml
+from pathlib import Path
+
+CONFIG_PATH = Path(__file__).parent.parent.parent / "config/settings.yaml"
+with open(CONFIG_PATH) as f:
+    config = yaml.safe_load(f)
+
+def load_file(file_path: str):
+    """Router to choose the correct loader based on extension"""
+    ext = os.path.splitext(file_path)[1].lower()
+    
+    if ext == ".pdf":
+        return PyPDFLoader(file_path).load()
+    elif ext == ".csv":
+        return CSVLoader(file_path).load()
+    elif ext in [".xlsx", ".xls"]:
+        return UnstructuredExcelLoader(file_path).load()
+    else:
+        raise ValueError(f"Unsupported file type: {ext}")
+
+def ingest_file(file_path: str):
+    """
+    Main pipeline: Load -> Split -> Embed -> Store
+    """
+    print(f"🚀 Starting ingestion for: {file_path}")
+    
+    # 1. Load
+    raw_docs = load_file(file_path)
+    print(f"📄 Loaded {len(raw_docs)} pages/rows")
+    
+    # 2. Split (Chunking)
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=config['rag']['chunk_size'],
+        chunk_overlap=config['rag']['chunk_overlap']
+    )
+    chunks = text_splitter.split_documents(raw_docs)
+    print(f"✂️  Split into {len(chunks)} chunks")
+    
+    # 3. Store (Embedding happens automatically here)
+    vector_store = get_vector_store()
+    vector_store.add_documents(chunks)
+    
+    print("✅ Ingestion complete. Data is ready for RAG.")
+    return True
+
+vector_store.py
+import chromadb
+from langchain_chroma import Chroma
+from src.rag.embeddings import get_embedding_model
+import yaml
+from pathlib import Path
+import os
+
+# Load Config
+CONFIG_PATH = Path(__file__).parent.parent.parent / "config/settings.yaml"
+with open(CONFIG_PATH) as f:
+    config = yaml.safe_load(f)
+
+def get_vector_store():
+    """Initializes or loads the ChromaDB vector store"""
+    embedding_func = get_embedding_model()
+    
+    # Persistent client to save data to disk
+    persist_path = config['rag']['vector_db_path']
+    collection = config['rag'].get('collection_name', 'default_collection')
+    
+    # Ensure directory exists
+    if not os.path.exists(persist_path):
+        os.makedirs(persist_path)
+    
+    vector_store = Chroma(
+        collection_name=collection,
+        embedding_function=embedding_func,
+        persist_directory=persist_path
+    )
+    
+    return vector_store
+
+
+data_sanitizer.py
+import pandas as pd
+import numpy as np
+import re
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Silence Pandas FutureWarnings
+pd.set_option('future.no_silent_downcasting', True)
+
+class DataSanitizer:
+    """
+    Production-grade Data Cleaning Engine.
+    Statistically determines headers and types without AI.
+    """
+
+    @staticmethod
+    def clean_file(file_path: str) -> pd.DataFrame:
+        """
+        Main pipeline to load and sanitize a file from disk.
+        """
+        logger.info(f"🚿 [Sanitizer] Processing File: {file_path}")
+        try:
+            # 1. LOAD RAW DATA
+            if file_path.endswith('.csv'):
+                try:
+                    # Attempt 1: Standard Load
+                    # Read without header first to detect it statistically later
+                    df = pd.read_csv(file_path, header=None, engine='python')
+                except Exception:
+                    # Attempt 2: Ragged Load (Fix for "Expected 1 fields, saw 4")
+                    # We incorrectly tell pandas there are 50 columns. 
+                    # This stops it from crashing on uneven rows.
+                    logger.warning("   ⚠️ Ragged CSV detected. Switching to 'Wide Load' mode.")
+                    df = pd.read_csv(file_path, header=None, engine='python', names=list(range(50)))
+            
+            elif file_path.endswith(('.xls', '.xlsx')):
+                df = pd.read_excel(file_path, header=None)
+            else:
+                return pd.DataFrame()
+
+            if df.empty: return df
+
+            # Delegate to the DataFrame cleaner
+            return DataSanitizer.clean_dataframe(df)
+
+        except Exception as e:
+            logger.error(f"❌ Sanitization Failed: {e}")
+            return pd.DataFrame()
+
+    @staticmethod
+    def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Applies the FULL sanitization pipeline to an in-memory DataFrame.
+        """
+        try:
+            if df.empty: return df
+            
+            # 0. PRE-CLEAN: Drop columns that are completely empty (Important for 'Wide Load' CSVs)
+            df = df.dropna(axis=1, how='all')
+
+            # 1. LOCATE REAL HEADER (With Protection for Existing Headers)
+            df = DataSanitizer._locate_and_set_header(df)
+
+            # 2. HANDLE MERGED HEADERS
+            df = DataSanitizer._flatten_multi_headers(df)
+
+            # 3. CLEAN & DEDUPLICATE COLUMNS
+            # Must run BEFORE _fill_merged_cells to prevent errors with duplicate column names
+            df = DataSanitizer._clean_column_names(df)
+
+            # 4. HANDLE MERGED CELLS
+            df = DataSanitizer._fill_merged_cells(df)
+
+            # 5. ENFORCE DATA TYPES
+            df = DataSanitizer._enforce_types(df)
+
+            # 6. FINAL CLEANUP
+            df = df.dropna(how='all').reset_index(drop=True)
+            
+            logger.info(f"✅ [Sanitizer] Success. Columns: {list(df.columns)}")
+            return df
+        except Exception as e:
+            logger.error(f"❌ DataFrame Cleaning Error: {e}")
+            return df
+
+    @staticmethod
+    def _locate_and_set_header(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Smart Header Detection.
+        If existing headers look valid (strings), KEEP THEM.
+        Only scans for new headers if current ones look like garbage (0, 1, 2 or Unnamed).
+        """
+        # 1. Analyze Current Header Quality
+        current_cols = df.columns
+        # Count how many columns are meaningful text (not numbers, not 'unnamed')
+        current_header_score = sum(
+            1 for x in current_cols 
+            if isinstance(x, str) and len(x.strip()) > 0 and "unnamed" not in x.lower() and not str(x).isdigit()
+        )
+        
+        # 🟢 PROTECTION: If >50% of columns are already valid strings, assume header is correct.
+        # This protects data coming from AI Parser (PDFs) which already have headers.
+        # Excel files loaded with header=None will fail this check (cols are 0,1,2), so they will proceed to scan (Correct behavior).
+        if len(current_cols) > 0 and (current_header_score / len(current_cols)) > 0.5:
+            # logger.info("   🛡️  Existing header looks valid. Skipping auto-detection.")
+            return df
+
+        # 2. If Header is bad (0, 1, 2...), Scan for a better one
+        best_idx = -1
+        max_text_score = -1
+        scan_rows = min(20, len(df))
+
+        for i in range(scan_rows):
+            row = df.iloc[i]
+            # Score = Number of valid strings that aren't 'nan'
+            text_score = sum(1 for x in row if isinstance(x, str) and len(x.strip()) > 0 and "nan" not in x.lower())
+            
+            # Prefer higher rows if scores are equal (find the top-most header)
+            if text_score > max_text_score:
+                max_text_score = text_score
+                best_idx = i
+
+        # Only promote if we found a row with significantly better text content
+        if max_text_score >= 2:
+            logger.info(f"   🔧 Dropping {best_idx} rows of metadata. Header found at Row {best_idx}.")
+            df.columns = df.iloc[best_idx]
+            df = df[best_idx + 1:].reset_index(drop=True)
+        else:
+            logger.warning("   ⚠️ No clear header row found. Using default index.")
+            
+        return df
+
+    @staticmethod
+    def _flatten_multi_headers(df: pd.DataFrame) -> pd.DataFrame:
+        if len(df) < 2: return df
+        row0 = df.columns.astype(str)
+        row1 = df.iloc[0].astype(str)
+        
+        unnamed_count = sum("unnamed" in c.lower() for c in row0)
+        if unnamed_count > 0 and (unnamed_count / len(df.columns) > 0.3):
+            logger.info("   🔧 Multi-row header detected. Flattening...")
+            new_cols = []
+            for c0, c1 in zip(row0, row1):
+                c0 = c0.strip() if "unnamed" not in c0.lower() and "nan" not in c0.lower() else ""
+                c1 = c1.strip() if "nan" not in c1.lower() else ""
+                
+                if c0 and c1: new_cols.append(f"{c0}_{c1}")
+                elif c1: new_cols.append(c1)
+                else: new_cols.append(c0)
+            
+            df.columns = new_cols
+            df = df[1:].reset_index(drop=True)
+        return df
+
+    @staticmethod
+    def _fill_merged_cells(df: pd.DataFrame) -> pd.DataFrame:
+        for col in df.columns:
+            # Skip if column is somehow a DataFrame (duplicate name issue wrapper)
+            if isinstance(df[col], pd.DataFrame): continue
+            
+            if df[col].dtype == object:
+                if df[col].isna().mean() > 0.1:
+                    df[col] = df[col].ffill().infer_objects(copy=False)
+        return df
+
+    @staticmethod
+    def _clean_column_names(df: pd.DataFrame) -> pd.DataFrame:
+        new_cols = []
+        for i, col in enumerate(df.columns):
+            c_str = str(col).strip()
+            if c_str.lower() == 'nan' or c_str == '':
+                c_str = "Metric" if i == 0 else f"Column_{i}"
+            
+            c_str = re.sub(r'\s+', '_', c_str)
+            c_str = re.sub(r'[^\w]', '', c_str)
+            new_cols.append(c_str)
+            
+        df.columns = new_cols
+        
+        # Deduplication
+        if not df.columns.is_unique:
+            logger.info("   🔧 Duplicate headers detected. Renaming...")
+            cols = pd.Series(df.columns)
+            for dup in cols[cols.duplicated()].unique(): 
+                mask = cols == dup
+                count = mask.sum()
+                new_names = [dup if i == 0 else f"{dup}_{i}" for i in range(count)]
+                cols.loc[mask] = new_names
+            df.columns = cols
+        return df
+
+    @staticmethod
+    def _enforce_types(df: pd.DataFrame) -> pd.DataFrame:
+        def clean_currency(val):
+            if pd.isna(val): return None
+            s_val = str(val)
+            nums = re.findall(r'-?\d+\.?\d*', s_val.replace(',', ''))
+            return float(nums[0]) if nums else None
+
+        for col in df.columns:
+            numeric_col = pd.to_numeric(df[col], errors='coerce')
+            if numeric_col.notna().mean() > 0.5:
+                if df[col].dtype == object:
+                    df[col] = df[col].apply(clean_currency)
+                else:
+                    df[col] = numeric_col
+            else:
+                df[col] = df[col].astype(str).str.strip()
+        return df
+
+
+data_utils.py
+
+import pandas as pd
+import numpy as np
+import io
+
+# ==========================================
+# PART 1: SMART LOADING
+# ==========================================
+
+def find_header_row(file_path, file_ext):
+    """Scans first 15 rows to find the row with the most text (the real header)."""
+    try:
+        if file_ext == '.csv':
+            preview = pd.read_csv(file_path, header=None, nrows=15)
+        else:
+            preview = pd.read_excel(file_path, header=None, nrows=15)
+        
+        max_score = -1
+        best_row_idx = 0
+        
+        for idx, row in preview.iterrows():
+            # Count non-empty strings in row
+            score = row.apply(lambda x: isinstance(x, str) and len(x.strip()) > 0).sum()
+            if score > max_score:
+                max_score = score
+                best_row_idx = idx
+        return best_row_idx
+    except Exception:
+        return 0
+
+def smart_load_table(file_path):
+    """Robust loader handling merged headers and metadata rows."""
+    file_ext = '.' + file_path.split('.')[-1].lower()
+    try:
+        header_row = find_header_row(file_path, file_ext)
+        if file_ext == '.csv':
+            df = pd.read_csv(file_path, header=header_row)
+        else:
+            df = pd.read_excel(file_path, header=header_row)
+            
+        # Clean column names
+        clean_cols = []
+        for col in df.columns:
+            clean = str(col).strip().replace("\n", " ")
+            if "Unnamed" in clean and df[col].isnull().all():
+                clean = "__DROP__"
+            clean_cols.append(clean)
+        df.columns = clean_cols
+        return df.drop(columns=[c for c in df.columns if "__DROP__" in c])
+    except Exception:
+        return pd.read_csv(file_path) if file_ext == '.csv' else pd.read_excel(file_path)
+
+# ==========================================
+# PART 2: ELABORATED SUMMARY (THE UPGRADE)
+# ==========================================
+
+def summarize_dataframe(df, max_categories=15):
+    """
+    Generates a deep-dive summary ensuring NO column is ignored.
+    Specifically targets Financials (Sums) and Metrics (Means).
+    """
+    summary = []
+    total_rows = len(df)
+    
+    # 1. High-Level Snapshot
+    summary.append("=== 📊 DATASET COMPREHENSIVE REPORT ===")
+    summary.append(f"Total Records: {total_rows:,}")
+    summary.append(f"Total Columns: {len(df.columns)}")
+    
+    # 2. Heuristic: Identify 'Financial' vs 'Metric' columns
+    # We look for keywords to decide if we should show SUM (Totals)
+    sum_keywords = ['revenue', 'profit', 'cost', 'amount', 'sales', 'units', 'leads', 'bonus', 'tax', 'cogs']
+    
+    # --- SECTION A: FINANCIAL & VOLUME TOTALS ---
+    summary.append("\n--- 💰 FINANCIAL & VOLUME TOTALS ---")
+    financial_found = False
+    
+    for col in df.columns:
+        if pd.api.types.is_numeric_dtype(df[col].dtype):
+            col_lower = col.lower()
+            # If it sounds like money or volume, give me the TOTAL
+            if any(k in col_lower for k in sum_keywords) and "id" not in col_lower and "year" not in col_lower:
+                total_val = df[col].sum()
+                avg_val = df[col].mean()
+                summary.append(f"🔹 {col}: Total = {total_val:,.2f} | Avg = {avg_val:,.2f}")
+                financial_found = True
+    
+    if not financial_found:
+        summary.append("(No direct financial columns identified based on naming conventions)")
+
+    # --- SECTION B: COLUMN-BY-COLUMN DEEP DIVE ---
+    summary.append("\n--- 🔍 DETAILED COLUMN ANALYSIS ---")
+
+    for col in df.columns:
+        summary.append(f"\n📌 COLUMN: '{col}'")
+        dtype = df[col].dtype
+        null_count = df[col].isnull().sum()
+        
+        # 1. Integrity Check
+        if null_count > 0:
+            pct = (null_count/total_rows)*100
+            summary.append(f"   [Warning] Missing Values: {null_count} ({pct:.1f}%)")
+
+        # 2. Logic by Type
+        # --- CATEGORICAL (Text/Flags) ---
+        if pd.api.types.is_object_dtype(dtype) or pd.api.types.is_categorical_dtype(dtype) or pd.api.types.is_bool_dtype(dtype):
+            unique_count = df[col].nunique()
+            summary.append(f"   Type: Categorical | Unique Values: {unique_count}")
+            
+            # Special handling for High Cardinality (like Dealer_ID or City)
+            if unique_count > 50:
+                top = df[col].value_counts().head(10) # Show Top 10 for context
+                summary.append(f"   Top 10 Contributors:")
+                for val, count in top.items():
+                    pct = (count / total_rows) * 100
+                    summary.append(f"     - {val}: {count} ({pct:.1f}%)")
+                summary.append(f"     ... and {unique_count - 10} others.")
+            else:
+                # Show ALL values if count is low (like Fuel_Type)
+                dist = df[col].value_counts()
+                for val, count in dist.items():
+                    pct = (count / total_rows) * 100
+                    summary.append(f"     - {val}: {count} ({pct:.1f}%)")
+
+        # --- NUMERICAL ---
+        elif pd.api.types.is_numeric_dtype(dtype):
+            summary.append("   Type: Numerical")
+            
+            # Skip ID columns for stats
+            if "id" in col.lower() or "code" in col.lower():
+                summary.append("   (ID Column - Statistical analysis skipped)")
+                continue
+                
+            desc = df[col].describe()
+            summary.append(f"   - Mean: {desc['mean']:.2f} | Median: {desc['50%']:.2f}")
+            summary.append(f"   - Min: {desc['min']} | Max: {desc['max']}")
+            
+            # Show Sum ONLY if we didn't show it in Section A (avoid duplicates, or reinforce important ones)
+            # Actually, showing SUM again here helps context.
+            if any(k in col.lower() for k in sum_keywords):
+                 summary.append(f"   - Grand Total: {df[col].sum():,.2f}")
+            
+            # Outlier / Spread
+            summary.append(f"   - Std Dev: {desc['std']:.2f} (Variability)")
+
+        # --- DATES ---
+        elif pd.api.types.is_datetime64_any_dtype(dtype):
+            summary.append("   Type: Date/Time")
+            summary.append(f"   - Range: {df[col].min()} to {df[col].max()}")
+            
+    return "\n".join(summary)
+
+
+image_extractor.py
+
+import fitz  # PyMuPDF
+from docx import Document
+import io
+import base64
+import os
+import logging
+
+logger = logging.getLogger(__name__)
+
+def extract_images_from_file(file_path: str) -> list:
+    """
+    Extracts images from PDF or DOCX and returns them as Base64 strings.
+    Returns: List[str] (list of base64 strings)
+    """
+    images_base64 = []
+    
+    try:
+        # 1. PDF Image Extraction
+        if file_path.lower().endswith('.pdf'):
+            try:
+                doc = fitz.open(file_path)
+                for page_index in range(len(doc)):
+                    page = doc[page_index]
+                    image_list = page.get_images(full=True)
+                    
+                    for img_index, img in enumerate(image_list):
+                        xref = img[0]
+                        base_image = doc.extract_image(xref)
+                        image_bytes = base_image["image"]
+                        
+                        # Filter small icons/logos (size check)
+                        if len(image_bytes) < 3000: continue 
+
+                        b64 = base64.b64encode(image_bytes).decode("utf-8")
+                        images_base64.append(b64)
+                        logger.info(f"   🖼️ Extracted Image {len(images_base64)} from PDF Page {page_index+1}")
+            except Exception as e:
+                logger.error(f"   ❌ PDF Image Extraction Error: {e}")
+
+        # 2. DOCX Image Extraction
+        elif file_path.lower().endswith('.docx'):
+            try:
+                doc = Document(file_path)
+                for rel in doc.part.rels.values():
+                    if "image" in rel.target_ref:
+                        image_bytes = rel.target_part.blob
+                        
+                        if len(image_bytes) < 3000: continue 
+
+                        b64 = base64.b64encode(image_bytes).decode("utf-8")
+                        images_base64.append(b64)
+                        logger.info(f"   🖼️ Extracted Image {len(images_base64)} from DOCX")
+            except Exception as e:
+                logger.error(f"   ❌ DOCX Image Extraction Error: {e}")
+
+    except Exception as e:
+        logger.error(f"   ❌ General Image Extraction Error: {e}")
+
+    return images_base64
+
+pdf_utils.py
+import os
+import re
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, PageBreak, KeepTogether
+from reportlab.lib.units import inch
+
+# --- 1. DEFINE STYLES ---
+styles = getSampleStyleSheet()
+
+styles.add(ParagraphStyle(
+    name='BrochureTitle',
+    parent=styles['Heading1'],
+    fontSize=24,
+    textColor=colors.HexColor('#2980b9'),
+    spaceAfter=20,
+    borderPadding=10,
+    borderColor=colors.HexColor('#3498db'),
+    borderWidth=0,
+    borderBottomWidth=2
+))
+
+styles.add(ParagraphStyle(
+    name='BrochureH2',
+    parent=styles['Heading2'],
+    fontSize=18,
+    textColor=colors.HexColor('#2c3e50'),
+    backColor=colors.HexColor('#ecf0f1'),
+    borderPadding=8,
+    spaceBefore=20,
+    spaceAfter=10
+))
+
+styles.add(ParagraphStyle(
+    name='BrochureH3',
+    parent=styles['Heading3'],
+    fontSize=14,
+    textColor=colors.HexColor('#34495e'),
+    spaceBefore=15,
+    spaceAfter=5
+))
+
+styles.add(ParagraphStyle(
+    name='BrochureBody',
+    parent=styles['Normal'],
+    fontSize=11,
+    leading=14,
+    spaceAfter=8
+))
+
+styles.add(ParagraphStyle(
+    name='BrochureBullet',
+    parent=styles['Normal'],
+    fontSize=11,
+    leading=14,
+    leftIndent=20,
+    bulletIndent=10,
+    spaceAfter=5
+))
+
+styles.add(ParagraphStyle(
+    name='Caption',
+    parent=styles['Normal'],
+    fontSize=10,
+    textColor=colors.HexColor('#7f8c8d'),
+    alignment=1 # Center
+))
+
+def make_cover_page(title, subtitle):
+    def draw_cover(canvas, doc):
+        canvas.saveState()
+        canvas.setFillColor(colors.HexColor('#2980b9'))
+        canvas.rect(0, A4[1] - 3*inch, A4[0], 3*inch, fill=1, stroke=0)
+        
+        canvas.setFont('Helvetica-Bold', 26)
+        canvas.setFillColor(colors.white)
+        canvas.drawCentredString(A4[0]/2, A4[1] - 2*inch, title[:35]) 
+        
+        canvas.setFont('Helvetica', 16)
+        canvas.setFillColor(colors.white)
+        canvas.drawCentredString(A4[0]/2, A4[1] - 2.5*inch, subtitle)
+        
+        canvas.setFont('Helvetica-Oblique', 10)
+        canvas.setFillColor(colors.gray)
+        canvas.drawCentredString(A4[0]/2, 1*inch, "Generated by GenAI Report Engine")
+        canvas.restoreState()
+    return draw_cover
+
+def clean_markdown_formatting(text):
+    if not text: return ""
+    text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
+    text = text.replace('< ', '&lt; ').replace(' >', ' &gt;')
+    return text
+
+def convert_markdown_to_pdf_brochure(markdown_text, output_path, images_dir=None, title="Report", subtitle="AI Analysis", chart_list=None):
+    """
+    Generates a PDF Report.
+    - chart_list: A list of tuples [(Description, Path), ...] to append as a Visual Dashboard.
+    """
+    doc = SimpleDocTemplate(output_path, pagesize=A4, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=72)
+    story = []
+    
+    # 1. Executive Summary Header
+    story.append(Spacer(1, 3*inch))
+    story.append(Paragraph("Executive Summary", styles['BrochureTitle'])) 
+    story.append(PageBreak()) 
+
+    # 2. Parse Markdown Text
+    lines = markdown_text.split('\n')
+    for line in lines:
+        line = line.strip()
+        if not line: continue
+            
+        # Basic Markdown Parsing
+        p_style = styles['BrochureBody']
+        prefix = ""
+        clean_line = line
+
+        if line.startswith('# '):
+            p_style = styles['BrochureTitle']
+            clean_line = line[2:]
+        elif line.startswith('## '):
+            p_style = styles['BrochureH2']
+            clean_line = line[3:]
+        elif line.startswith('### '):
+            p_style = styles['BrochureH3']
+            clean_line = line[4:]
+        elif line.startswith('* ') or line.startswith('- '):
+            p_style = styles['BrochureBullet']
+            clean_line = line[2:]
+            prefix = "• "
+        
+        # Skip image links in text (we will add them manually at the end)
+        if "![" in line and "](" in line:
+            continue
+
+        if clean_line:
+            formatted_text = clean_markdown_formatting(clean_line)
+            story.append(Paragraph(f"{prefix}{formatted_text}", p_style))
+
+    # 3. APPEND VISUAL DASHBOARD (The Fix)
+    if chart_list and len(chart_list) > 0:
+        story.append(PageBreak())
+        story.append(Paragraph("Visual Dashboard", styles['BrochureTitle']))
+        story.append(Spacer(1, 0.2*inch))
+        
+        for desc, img_path in chart_list:
+            # Clean path for OS
+            img_path = img_path.replace('/', os.sep).replace('\\', os.sep)
+            
+            if os.path.exists(img_path):
+                # Keep Title + Image together so they don't split across pages
+                content = []
+                content.append(Paragraph(desc, styles['BrochureH3']))
+                try:
+                    # Resize to fit page width (6 inches)
+                    im = Image(img_path, width=6*inch, height=3.5*inch)
+                    content.append(im)
+                    content.append(Spacer(1, 0.5*inch))
+                    story.append(KeepTogether(content))
+                except Exception as e:
+                    story.append(Paragraph(f"[Error rendering image: {desc}]", styles['Caption']))
+            else:
+                 story.append(Paragraph(f"[Image Missing: {desc}]", styles['Caption']))
+
+    print(f"🎨 Rendering PDF Brochure to: {output_path}")
+    doc.build(story, onFirstPage=make_cover_page(title, subtitle))
+    return output_path
+
+
+viz_utils.py
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import os
+import numpy as np
+import re
+
+# Set style
+sns.set_theme(style="whitegrid")
+
+def generate_smart_charts(df, output_dir):
+    """
+    Generates intelligent charts covering MULTIPLE dimensions.
+    Iterates through top categorical columns to ensure Primary Keys are plotted.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    charts = []
+    
+    # 1. Identify Columns
+    num_cols = df.select_dtypes(include=['number']).columns
+    cat_cols = df.select_dtypes(include=['object', 'string', 'category']).columns
+    
+    if len(num_cols) == 0 or len(cat_cols) == 0:
+        return []
+
+    # 🟢 UPGRADE: Pick Top 2 Dimensions (e.g., Product_ID AND Station)
+    # This ensures we get charts for the Primary Key M001.. AND the Categories
+    target_cats = cat_cols[:2] 
+    
+    # Limit to Top 2 Metrics to avoid chart spam
+    target_metrics = num_cols[:2]
+
+    for cat in target_cats:
+        for metric in target_metrics:
+            try:
+                # Setup Plot
+                plt.figure(figsize=(12, 7))
+                
+                # 2. FILTER GARBAGE ROWS
+                df_clean = df.copy()
+                df_clean = df_clean[df_clean[cat].notna()]
+                df_clean = df_clean[~df_clean[cat].astype(str).str.match(r'^\s*$', na=False)]
+                df_clean = df_clean[~df_clean[cat].astype(str).str.contains(r'Expenses|Total', case=False, na=False)]
+                df_clean = df_clean[~df_clean[cat].astype(str).str.lower().eq('nan')]
+
+                # 3. FORCE NUMERIC
+                df_clean[metric] = pd.to_numeric(df_clean[metric], errors='coerce')
+                
+                # 4. AGGREGATE DATA
+                # If there are many rows (Transactional), we must GroupBy first
+                # This fixes the issue where multiple M001 rows weren't being summed up
+                if len(df_clean) > 20:
+                    plot_data = df_clean.groupby(cat)[metric].sum().reset_index()
+                else:
+                    plot_data = df_clean
+
+                # Filter zero values
+                plot_data = plot_data[plot_data[metric].abs() > 0]
+                
+                # 5. SORT: Highest values on top
+                plot_data = plot_data.sort_values(by=metric, ascending=False).head(12)
+                
+                if plot_data.empty: continue
+
+                # 6. PLOT
+                ax = sns.barplot(
+                    data=plot_data, 
+                    x=metric, 
+                    y=cat, 
+                    hue=cat, 
+                    palette="viridis", 
+                    legend=False
+                )
+                
+                plt.title(f"{metric} by {cat}", fontsize=14, fontweight='bold')
+                plt.xlabel(metric)
+                plt.ylabel("") 
+
+                # Add Data Labels
+                for container in ax.containers:
+                    ax.bar_label(container, fmt='%.0f', padding=3, fontsize=10)
+
+                plt.tight_layout()
+                
+                # Save with unique name combining Metric + Dimension
+                clean_cat_name = str(cat).replace(" ", "_").replace("/", "")
+                clean_metric_name = str(metric).replace(" ", "_").replace("/", "")
+                filename = f"{clean_metric_name}_by_{clean_cat_name}.png"
+                
+                path = os.path.join(output_dir, filename)
+                plt.savefig(path)
+                plt.close()
+                
+                charts.append((f"{clean_metric_name} by {clean_cat_name}", path))
+                
+            except Exception as e:
+                print(f"⚠️ Chart Error for {metric} vs {cat}: {e}")
+                continue
+
+    return charts
+
+app_api.py
+
+import sys
+import os
+import shutil
+import logging
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+
+# --- 1. SETUP PATHS & LOGGING ---
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+sys.path.append(project_root)
+
+# Import the existing pipeline logic
+# We rename 'main' to 'run_pipeline' for clarity
+from scripts.generate_full_report import main as run_pipeline
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("API")
+
+# Define Data Directories
+RAW_DIR = os.path.join(project_root, "data", "raw")
+ARTIFACTS_DIR = os.path.join(project_root, "data", "artifacts")
+os.makedirs(RAW_DIR, exist_ok=True)
+os.makedirs(ARTIFACTS_DIR, exist_ok=True)
+
+# --- 2. INITIALIZE APP ---
+app = FastAPI(title="GenAI Report Engine API", version="2.0")
+
+# Enable CORS (Allows React Frontend to talk to this Backend)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # In production, set this to ["http://localhost:5173"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- 3. API ENDPOINTS ---
+
+@app.get("/")
+def health_check():
+    """Simple check to ensure server is running."""
+    return {"status": "online", "system": "GenAI Engine Ready"}
+
+@app.post("/generate")
+async def generate_report(file: UploadFile = File(...)):
+    """
+    Receives file from React -> Runs Python Pipeline -> Returns Report
+    """
+    try:
+        # A. Save the Uploaded File
+        file_location = os.path.join(RAW_DIR, file.filename)
+        logger.info(f"📥 API Received file: {file.filename}")
+        
+        with open(file_location, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        # B. Run the AI Pipeline (The Heavy Lifting)
+        logger.info("🤖 Starting GenAI Analysis...")
+        try:
+            # Calls the main() function from generate_full_report.py
+            run_pipeline(file_location)
+        except Exception as e:
+            logger.error(f"Pipeline Execution Failed: {e}")
+            raise HTTPException(status_code=500, detail=f"AI Engine Error: {str(e)}")
+
+        # C. Verify Output Files Exist
+        report_md_path = os.path.join(ARTIFACTS_DIR, f"{file.filename}_report.md")
+        
+        if not os.path.exists(report_md_path):
+            raise HTTPException(status_code=500, detail="Analysis finished, but no report file was found.")
+
+        # D. Read Markdown Content
+        with open(report_md_path, "r", encoding="utf-8") as f:
+            markdown_content = f.read()
+
+        logger.info("✅ Report Generated Successfully.")
+
+        # E. Return JSON to React
+        return {
+            "status": "success",
+            "filename": file.filename,
+            "markdown_content": markdown_content,
+            "pdf_download_url": f"/download/{file.filename}_report.pdf"
+        }
+
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"❌ Critical API Error: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.get("/download/{filename}")
+async def download_file(filename: str):
+    """
+    Allows React to download the generated PDF
+    """
+    file_path = os.path.join(ARTIFACTS_DIR, filename)
+    if os.path.exists(file_path):
+        return FileResponse(file_path, media_type='application/pdf', filename=filename)
+    
+    return JSONResponse(status_code=404, content={"error": "File not found"})
+
+# Only for debugging directly
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+run_backend.py
+import sys
+import os
+import uvicorn
+
+# 1. Force the current script's directory (Root) into Python's path
+# This makes sure Python sees the 'src' folder right next to this script.
+root_dir = os.path.dirname(os.path.abspath(__file__))
+if root_dir not in sys.path:
+    sys.path.append(root_dir)
+
+print(f"📂 Execution Path: {root_dir}")
+
+# 2. Import the app object DIRECTLY
+# We do this inside a try-block to catch the error instantly if it fails
+try:
+    from src.app_api import app
+    print("✅ Successfully imported FastAPI app.")
+except ImportError as e:
+    print(f"\n❌ CRITICAL IMPORT ERROR: {e}")
+    print("---------------------------------------------------")
+    print("Troubleshooting steps:")
+    print("1. Are you in the 'genai-report-generator' folder?")
+    print("2. Does 'src/app_api.py' exist?")
+    print("3. Does 'src/__init__.py' exist?")
+    print("---------------------------------------------------")
+    sys.exit(1)
+
+if __name__ == "__main__":
+    print("🚀 Starting Server on Port 8000...")
+    # NOTICE: We pass the 'app' OBJECT, not the string "src.app_api:app"
+    # This prevents the 'Could not import module' error.
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
